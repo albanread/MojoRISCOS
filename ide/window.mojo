@@ -88,6 +88,10 @@ from ide.python_env import (
     prepare_and_run,
     project_location,
     python_report,
+    prepare_environment,
+    requirements_file,
+    create_environment_command,
+    ensurepip_command,
 )
 from ide.python_env import variables as python_variables
 from ide.settings import set_setting, setting
@@ -5540,15 +5544,65 @@ def python_create(hwnd: Int) raises -> String:
     Raises:
         If the window has no document.
     """
-    var said = create_environment(python_project(hwnd))
-    _restart_server_for_python(hwnd, said)
+    var project = python_project(hwnd)
+    if project.byte_length() == 0:
+        return _say(hwnd, String("no project is open"))
+    if environment_ready(project):
+        # Nothing to build. Say so rather than spending eight seconds
+        # rebuilding an environment that is already there.
+        return _say(
+            hwnd, String("the environment is already there: ") + project
+        )
+    # Through the chain rather than the blocking call, for the same reason
+    # `python_install` is: eight seconds of a frozen window with no output is
+    # indistinguishable from a menu item that does nothing.
+    var steps = List[String]()
+    var make = create_environment_command(project)
+    if make.byte_length() > 0:
+        steps.append(make)
+    var bootstrap = ensurepip_command(project)
+    if bootstrap.byte_length() > 0:
+        steps.append(bootstrap)
+    if len(steps) == 0:
+        return _say(hwnd, String("no Python runtime is configured"))
     _doc_at(hwnd)[].pane_mode = PANE_PYTHON
     _touch(hwnd)
-    return said^
+    return start_chain(steps^, project)
+
+
+def _say(hwnd: Int, var message: String) raises -> String:
+    """Put a sentence where a person will actually see it.
+
+    The Python menu handlers hand their result to `print`, and Griddle is a
+    GUI-subsystem binary with no console attached -- so every one of those
+    sentences has been going nowhere. That is invisible when the answer is
+    "installed", and indistinguishable from a dead menu item when the answer
+    is "there is nothing to install".
+
+    The output pane, because that is where the work these items do already
+    streams to, and the status bar as well, because a one-line answer that
+    needed no work should not require looking down."""
+    append_output(message + "\n")
+    _notice(hwnd, message)
+    _touch(hwnd)
+    return message^
 
 
 def python_install(hwnd: Int, requirement: String) raises -> String:
-    """Install into this project's environment.
+    """Install into this project's environment, in the output pane.
+
+    THIS USED TO DO ITS WORK AND THEN TELL NOBODY. `install_packages` blocks
+    for as long as pip takes -- up to five minutes on a cold environment --
+    and returns a sentence, which the menu handler passed to `print`. Griddle
+    is a GUI-subsystem binary and has no console, so that sentence went
+    nowhere at all. From the outside: choose Install Project Dependencies,
+    watch the editor stop responding for a minute, and then see nothing
+    happen. Reported, fairly, as "it does NOTHING".
+
+    So it is a chain now, exactly like Run: create the environment if there
+    is none, bootstrap pip if it has none, install, and record what was
+    installed. Every step streams into the output pane while it runs, and the
+    sequence stops at the first failure with the reason on screen.
 
     Args:
         hwnd: The window.
@@ -5556,24 +5610,28 @@ def python_install(hwnd: Int, requirement: String) raises -> String:
             declares in requirements.txt or pyproject.toml.
 
     Returns:
-        What happened.
+        What was started, or why it was not.
 
     Raises:
         If the window has no document.
     """
     var project = python_project(hwnd)
-    if not environment_ready(project):
-        # Rather than failing at pip and making somebody read its output to
-        # find out the environment was never made. The Mac does the same for
-        # Run and Debug.
-        var made = create_environment(project)
-        if not made.startswith("Python environment ready"):
-            return made^
-    var said = install_packages(requirement, project)
-    _restart_server_for_python(hwnd, said)
-    _doc_at(hwnd)[].pane_mode = PANE_PYTHON
+    if project.byte_length() == 0:
+        return _say(
+            hwnd, String("no project is open, so there is nothing to install")
+        )
+    var steps = prepare_environment(project, requirement)
+    if len(steps) == 0:
+        if String(requirement.strip()).byte_length() > 0:
+            return _say(hwnd, String("could not build a pip command for that"))
+        if requirements_file(project).byte_length() == 0:
+            return _say(hwnd, String("no requirements.txt in ") + project)
+        return _say(
+            hwnd,
+            String("everything requirements.txt asks for is installed"),
+        )
     _touch(hwnd)
-    return said^
+    return start_chain(steps^, project)
 
 
 def _restart_server_for_python(hwnd: Int, outcome: String) raises:

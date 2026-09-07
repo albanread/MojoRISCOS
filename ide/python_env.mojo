@@ -1084,50 +1084,77 @@ def run_file_command(project: String, path: String) raises -> String:
     return command_line(python, args)
 
 
-def prepare_and_run(project: String, path: String) raises -> List[String]:
-    """Everything that has to happen before this file can run, then the run.
+def prepare_environment(
+    project: String, requirement: String = String()
+) raises -> List[String]:
+    """The commands that make this project's environment what it should be.
 
-    One to three commands:
+    One to four, in order, and each is skipped when it is already true:
 
-      1. CREATE THE ENVIRONMENT, if the project declares requirements and
-         has no environment yet. A project that declares nothing gets no
-         environment -- there would be nothing to put in it.
-      2. INSTALL, if what requirements.txt asks for is not what was last
-         installed, followed by the step that records it.
-      3. RUN.
+      1. CREATE the virtual environment.
+      2. BOOTSTRAP pip into it, when it is new or has none.
+      3. INSTALL -- `requirement` when one is named, otherwise whatever
+         requirements.txt or pyproject.toml declares.
+      4. RECORD what was installed, so the next run can skip step 3. Only
+         for the project's declared dependencies: installing one package by
+         hand says nothing about whether requirements.txt is satisfied, and
+         stamping it would make the next Run skip an install it needs.
 
-    Returning the list rather than starting it keeps the decision here and
-    the process handling in `ide/build.mojo`, which already knows how to
-    stream a command into the output pane and how to stop a sequence when
-    one of its steps fails.
+    A LIST OF COMMANDS RATHER THAN THE WORK ITSELF, and that is the whole
+    point of this function. The synchronous `create_environment` and
+    `install_packages` below block their caller for up to three and five
+    minutes; called from a window that is what a frozen editor looks like,
+    and the sentence they return is the only evidence anything happened.
+    Handed to `ide/build.mojo`'s `start_chain` instead, every step streams
+    into the output pane as it runs and the sequence stops at the first
+    failure.
     """
     var steps = List[String]()
-    if project.byte_length() == 0 or path.byte_length() == 0:
+    if project.byte_length() == 0:
         return steps^
 
+    var named = String(requirement.strip()).byte_length() > 0
     var declares = requirements_file(project).byte_length() > 0
-    var making = declares and not environment_ready(project)
+    if not named and not declares:
+        return steps^
+
+    var making = not environment_ready(project)
     if making:
         var make = create_environment_command(project)
         if make.byte_length() > 0:
             steps.append(make)
-    # Pip, when the environment is new or when it turns out not to have any.
-    # A brand-new environment is assumed to need it rather than checked,
-    # because at this point it does not exist to be checked.
-    if declares and (making or not environment_has_pip(project)):
+    if making or not environment_has_pip(project):
         var bootstrap = ensurepip_command(project)
         if bootstrap.byte_length() > 0:
             steps.append(bootstrap)
-    if declares and not dependencies_current(project):
-        # `planned`: the environment may not exist yet, but the step
-        # queued above creates it, and this one runs after that.
+
+    if named:
+        var one = install_command(requirement, project, planned=True)
+        if one.byte_length() > 0:
+            steps.append(one)
+        return steps^
+
+    if not dependencies_current(project):
         var install = project_dependency_command(project, planned=True)
         if install.byte_length() > 0:
             steps.append(install)
             var stamp = stamp_command(project)
             if stamp.byte_length() > 0:
                 steps.append(stamp)
+    return steps^
 
+
+def prepare_and_run(project: String, path: String) raises -> List[String]:
+    """Everything that has to happen before this file can run, then the run.
+
+    The setup is `prepare_environment`; this adds the run on the end. A
+    project that declares nothing gets no environment -- there would be
+    nothing to put in it -- and simply runs on the toolchain's interpreter.
+    """
+    if project.byte_length() == 0 or path.byte_length() == 0:
+        return List[String]()
+
+    var steps = prepare_environment(project)
     var run = run_file_command(project, path)
     if run.byte_length() == 0:
         return List[String]()

@@ -757,6 +757,48 @@ if ($made -and $imported -and $stamped) {
     Record 'python-project-run' 'FAIL' "venv=$made import=$imported stamp=$stamped"
 }
 
+# 31b2. The Install Project Dependencies menu item does something, and says so.
+# It used to do neither visibly. `install_packages` blocks for as long as pip
+# takes and returns a sentence, which the menu handler passed to `print` --
+# and Griddle is a GUI-subsystem binary with no console, so the sentence went
+# nowhere. Choosing the item froze the window for a minute and then showed
+# nothing, which is indistinguishable from a menu item wired to nothing.
+#
+# Two assertions, because there are two ways to fail: the package has to
+# ARRIVE, and the editor has to SAY something either way. `;;` runs the whole
+# sequence in one process, which `--cmd` on its own cannot.
+$menuProj = Join-Path $env:TEMP ('griddle-pymenu-' + $PID)
+Remove-Item -Recurse -Force $menuProj -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $menuProj | Out-Null
+Set-Content -Path (Join-Path $menuProj 'requirements.txt') -Value 'six==1.16.0' -Encoding ascii
+Set-Content -Path (Join-Path $menuProj 'main.py') -Value 'import six' -Encoding ascii
+
+$menuVenv = ''
+$shown2 = Ask "project $menuProj;;python show"
+if ($shown2 -match 'venv (\S.*?)\s+(?:absent|present)') { $menuVenv = $matches[1].Trim() }
+if ($menuVenv -ne '') { Remove-Item -Recurse -Force $menuVenv -ErrorAction SilentlyContinue }
+
+$menuOut = Ask "project $menuProj;;menu Python > Install Project Dependencies;;build wait 300000"
+$menuPy = if ($menuVenv -ne '') { Join-Path $menuVenv 'Scripts\python.exe' } else { '' }
+$landed = ($menuPy -ne '') -and (Test-Path $menuPy) -and
+    ((cmd /c "`"$menuPy`" -c `"import six;print(six.__version__)`" 2>&1" | Out-String) -match '1\.16\.0')
+if ($landed) {
+    Record 'python-install-menu' 'PASS' 'the menu item installed what requirements.txt asks for'
+} else {
+    Record 'python-install-menu' 'FAIL' 'the menu item installed nothing'
+}
+
+# And with everything already installed it must still answer, in the output
+# pane rather than into a console that does not exist.
+$againOut = Ask "project $menuProj;;menu Python > Install Project Dependencies;;output"
+if ($againOut -match 'everything requirements.txt asks for is installed') {
+    Record 'python-install-says' 'PASS' 'a no-op install still reports itself'
+} else {
+    Record 'python-install-says' 'FAIL' 'a no-op install said nothing a person can see'
+}
+Remove-Item -Recurse -Force $menuProj -ErrorAction SilentlyContinue
+if ($menuVenv -ne '') { Remove-Item -Recurse -Force $menuVenv -ErrorAction SilentlyContinue }
+
 # 31c. An unchanged requirements.txt installs nothing.
 # A person presses Run far more often than they edit their dependencies, and
 # a pip round trip every time would make the feature worse than not having
