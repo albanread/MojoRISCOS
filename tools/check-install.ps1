@@ -79,6 +79,45 @@ try {
     Remove-Item Env:GAMEPANE_FRAMES -ErrorAction SilentlyContinue
     Check 'gamepane-runs'       (($runOut -match 'presented 20 frames') -and ($runOut -match 'exit 0')) 'a game example RUNS from the installed copy'
 
+    # A Python project, set up and installed by the INSTALLED editor.
+    #
+    # Every part of this is different in a release. The interpreter is the
+    # bundled `python\python.exe` rather than the one bazel fetched, and it
+    # has to carry `Lib\venv` and `Lib\ensurepip` or nothing can be created;
+    # the environments root is under %LOCALAPPDATA%, which a packaged
+    # application has redirected somewhere else; and pip has to reach the
+    # network from a process whose environment this script has stripped.
+    #
+    # Worth its own check because "Install Project Dependencies" spent a
+    # release doing its work and telling nobody, and the fix -- a command
+    # chain that streams into the output pane -- is a different code path
+    # from the blocking call it replaced. A check against the dev tree proves
+    # the path; only this proves the bundle.
+    $pyProj = "$Target\examples\pycheck"
+    Remove-Item -Recurse -Force $pyProj -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $pyProj | Out-Null
+    Set-Content -Path "$pyProj\requirements.txt" -Value 'six==1.16.0' -Encoding ascii
+    Set-Content -Path "$pyProj\main.py" -Value 'import six' -Encoding ascii
+
+    # Ask where the environment goes rather than construct it: under a
+    # packaged application that path is not one this script can predict.
+    $pyVenv = ''
+    $shown = & cmd /c "`"$Target\bin\griddle.exe`" --cmd `"project $pyProj;;python show`" 2>&1" | Out-String
+    if ($shown -match 'venv (\S.*?)\s+(?:absent|present)') { $pyVenv = $matches[1].Trim() }
+    if ($pyVenv -ne '') { Remove-Item -Recurse -Force $pyVenv -ErrorAction SilentlyContinue }
+
+    $pyOut = & cmd /c "`"$Target\bin\griddle.exe`" --cmd `"project $pyProj;;menu Python > Install Project Dependencies;;build wait 300000`" 2>&1" | Out-String
+    $pyExe = if ($pyVenv -ne '') { Join-Path $pyVenv 'Scripts\python.exe' } else { '' }
+    $pyOk = ($pyExe -ne '') -and (Test-Path $pyExe) -and
+        ((& cmd /c "`"$pyExe`" -c `"import six;print(six.__version__)`" 2>&1" | Out-String) -match '1\.16\.0')
+    Check 'python-install-menu' $pyOk 'the installed IDE built a venv and installed requirements.txt'
+    if (-not $pyOk) {
+        Write-Host '--- python transcript tail ---'
+        ($pyOut -split "`r?`n" | Select-Object -Last 15) | ForEach-Object { Write-Host "  $_" }
+    }
+    Remove-Item -Recurse -Force $pyProj -ErrorAction SilentlyContinue
+    if ($pyVenv -ne '') { Remove-Item -Recurse -Force $pyVenv -ErrorAction SilentlyContinue }
+
     # A GPU program, built and RUN the same way. It imports nvptxrt.dll --
     # the runtime is a DLL, not a static archive -- and the three Mojo
     # runtime DLLs; with PATH scrubbed, only the editor can supply the

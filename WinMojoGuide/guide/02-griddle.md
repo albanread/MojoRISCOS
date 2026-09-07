@@ -161,6 +161,14 @@ starts, which is what this menu is for.
 | Install Package… | asks for a name and installs it |
 | Show Environment | the interpreter, the environment, and **the values Run will inject** |
 
+All three of the first items work the same way and show their working in
+the **output pane**: each one runs as a sequence of commands -- create the
+environment, put pip in it, install, record what was installed -- and each
+step's own output appears as it runs. Steps already satisfied are skipped, so
+choosing Install Project Dependencies when nothing has changed answers
+`everything requirements.txt asks for is installed` and does no work. A first
+install on a cold project takes about ten seconds.
+
 Environments live outside the project, one per project, under
 `%LOCALAPPDATA%\Griddle\Python\Environments`. The project directory is not
 polluted and the environment survives a clean checkout.
