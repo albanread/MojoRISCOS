@@ -222,6 +222,66 @@ if (Test-Path $shot) {
     Remove-Item $shot -ErrorAction SilentlyContinue
 }
 
+# ---- 6c. a long status message stays on one line ---------------------------
+# DirectWrite wraps by default, and every label the chrome draws goes into a
+# box with room for exactly one line. A message wider than its box was
+# therefore folded onto a second line the box then clipped -- so the sentence
+# lost its back half AND the front half sat a line too high. It looked like a
+# rendering fault, which is a bad way to learn that a string is long.
+#
+# The witness is the ink. The old box was 400 design pixels wide, so nothing
+# could be drawn past x = 412; the status bar is now as wide as the window,
+# and this message is far wider than 400. Ink to the right of 500 means the
+# text is on one line and going where it should.
+$longProj = Join-Path $env:TEMP ('griddle-longstatus-' + $PID)
+New-Item -ItemType Directory -Force -Path $longProj | Out-Null
+Set-Content -Path (Join-Path $longProj 'main.py') -Value 'print("hi")' -Encoding ascii
+$statusShot = Join-Path $env:TEMP ('griddle-status-' + $PID + '.png')
+Remove-Item $statusShot -ErrorAction SilentlyContinue
+# `python install` with no requirements.txt answers with a sentence carrying
+# the whole project path in it, which is the long message this needs.
+$null = Ask "project $longProj;;open $longProj\main.py;;python install;;screenshot $statusShot"
+if (Test-Path $statusShot) {
+    Add-Type -AssemblyName System.Drawing
+    $img = [System.Drawing.Bitmap]::FromFile($statusShot)
+    try {
+        # Find the bar rather than assume where it is. The capture includes
+        # the window's black border, and a scan that runs into it measures
+        # the border instead of the text -- which passes whatever the text
+        # did, so the check would prove nothing. The bar is the lowest thing
+        # in the picture that is not that border, read in a column to the
+        # right of anything the bar could be saying.
+        $probe = $img.Width - 20
+        $barBottom = -1
+        for ($y = $img.Height - 1; $y -gt $img.Height - 60; $y--) {
+            $p = $img.GetPixel($probe, $y)
+            if ($p.R + $p.G + $p.B -gt 12) { $barBottom = $y; break }
+        }
+        if ($barBottom -lt 0) {
+            Record 'status-one-line' 'FAIL' 'no status bar found in the capture'
+        } else {
+            $bar = $img.GetPixel($probe, $barBottom - 4)
+            $rightmost = -1
+            for ($x = 500; $x -lt $probe; $x++) {
+                for ($y = $barBottom - 28; $y -le $barBottom - 2; $y++) {
+                    $p = $img.GetPixel($x, $y)
+                    if ([Math]::Abs($p.R - $bar.R) + [Math]::Abs($p.G - $bar.G) +
+                        [Math]::Abs($p.B - $bar.B) -gt 40) { $rightmost = $x; break }
+                }
+            }
+            if ($rightmost -gt 500) {
+                Record 'status-one-line' 'PASS' "the status bar draws out to x=$rightmost, past the old 400-pixel box"
+            } else {
+                Record 'status-one-line' 'FAIL' 'nothing drawn past x=500 -- the message wrapped and was clipped'
+            }
+        }
+    } finally { $img.Dispose() }
+    Remove-Item $statusShot -ErrorAction SilentlyContinue
+} else {
+    Record 'status-one-line' 'FAIL' 'no screenshot to measure'
+}
+Remove-Item -Recurse -Force $longProj -ErrorAction SilentlyContinue
+
 # ---- 7. every region of the chrome is laid out -----------------------------
 # Asked of the running window rather than recomputed here, so this checks
 # the layout instead of a copy of it.

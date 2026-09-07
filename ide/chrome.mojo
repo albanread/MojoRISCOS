@@ -729,6 +729,31 @@ def bring_up(
     )
     _ = rail_family
     _ = rail_locale
+    # NO WRAPPING, on every format the chrome draws with. DirectWrite's
+    # default is DWRITE_WORD_WRAPPING_WRAP, and a label is drawn into a box
+    # with room for one line -- so a string wider than its box does not get
+    # clipped at the right edge, it gets folded onto a second line that the
+    # box then cuts off. On the status bar that showed as the message losing
+    # its second half AND the first half sitting a line too high, which reads
+    # as a rendering fault rather than as text that is too long.
+    #
+    # DWRITE_WORD_WRAPPING_NO_WRAP is 1.
+    for one_line in [
+        chrome.text_format, chrome.icon_format, chrome.tiny_format
+    ]:
+        if one_line == 0:
+            continue
+        var wrap = OpaquePointer[MutUntrackedOrigin](
+            unsafe_from_address=one_line
+        )
+        _ = com_method_of[
+            def (
+                OpaquePointer[MutUntrackedOrigin], c_int
+            ) thin abi("C") -> Int32,
+            "IDWriteTextFormat",
+            "SetWordWrapping",
+        ](wrap)(wrap, c_int(1))
+
     for centred in [chrome.icon_format, chrome.tiny_format]:
         if centred == 0:
             continue
@@ -983,9 +1008,13 @@ def draw(
         chrome, project_label(), layout.rail_w() + scaled(14, chrome.scale),
         scaled(10, chrome.scale), DIM,
     )
+    # The whole bar, less the margin at each end. A status message is a
+    # sentence -- "everything requirements.txt asks for is installed" -- and
+    # 400 design pixels is not a sentence.
     _label(
         chrome, status, scaled(12, chrome.scale),
         layout.status().top + scaled(7, chrome.scale), DIM,
+        layout.status().right - scaled(24, chrome.scale),
     )
 
     return layout
@@ -1113,13 +1142,24 @@ def _boxed(
 
 
 def _label(chrome: Chrome, text: StringSlice,
-           x: Float32, y: Float32, colour: Int) raises:
+           x: Float32, y: Float32, colour: Int,
+           width: Float32 = 400) raises:
     """Draw one short label at a point.
 
     The length comes from the text rather than from the caller. It used to be
     a parameter, and one call site had been passing eight for a seven-letter
     word since sprint 0.4 -- drawing the NUL, which is invisible, which is why
     it survived.
+
+    Args:
+        chrome: What is being drawn on.
+        text: The label.
+        x: Its left edge.
+        y: Its top edge.
+        colour: The brush colour.
+        width: How much room it has. 400 design pixels suits a caption; the
+            status bar is the width of the window and says whole sentences,
+            so it passes its own.
     """
     var rt = Com[StaticString("ID2D1HwndRenderTarget")](
         borrowed=chrome.target
@@ -1136,7 +1176,7 @@ def _label(chrome: Chrome, text: StringSlice,
         return
     var wide_text = utf16(text)
     var count = len(wide_text) - 1  # the NUL is not a character
-    var box = D2D_RECT_F(x, y, x + 400, y + 24)
+    var box = D2D_RECT_F(x, y, x + width, y + 24)
     var this = OpaquePointer[MutUntrackedOrigin](
         unsafe_from_address=chrome.target
     )
