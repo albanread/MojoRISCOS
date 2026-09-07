@@ -799,6 +799,38 @@ if ($againOut -match 'everything requirements.txt asks for is installed') {
 Remove-Item -Recurse -Force $menuProj -ErrorAction SilentlyContinue
 if ($menuVenv -ne '') { Remove-Item -Recurse -Force $menuVenv -ErrorAction SilentlyContinue }
 
+# 31b3. Install Package... installs the package that was typed.
+# The third Python menu item, and it went through the same blocking call --
+# type a name, press Return, watch the window stop responding. It is the
+# prompt line's own path rather than the menu handler's, so it needs its own
+# witness: `prompt package` opens it, `prompt type` fills it, `prompt accept`
+# is Return.
+#
+# A project with NO requirements.txt, deliberately. A named package has to
+# build the environment on its own account; there is nothing declared here to
+# make one for.
+$pkgProj = Join-Path $env:TEMP ('griddle-pkg-' + $PID)
+Remove-Item -Recurse -Force $pkgProj -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $pkgProj | Out-Null
+Set-Content -Path (Join-Path $pkgProj 'main.py') -Value 'import attrs' -Encoding ascii
+
+$pkgVenv = ''
+$shown3 = Ask "project $pkgProj;;python show"
+if ($shown3 -match 'venv (\S.*?)\s+(?:absent|present)') { $pkgVenv = $matches[1].Trim() }
+if ($pkgVenv -ne '') { Remove-Item -Recurse -Force $pkgVenv -ErrorAction SilentlyContinue }
+
+$null = Ask "project $pkgProj;;prompt package;;prompt type attrs;;prompt accept;;build wait 300000"
+$pkgPy = if ($pkgVenv -ne '') { Join-Path $pkgVenv 'Scripts\python.exe' } else { '' }
+$pkgOk = ($pkgPy -ne '') -and (Test-Path $pkgPy) -and
+    ((cmd /c "`"$pkgPy`" -c `"import attrs;print('OK')`" 2>&1" | Out-String) -match 'OK')
+if ($pkgOk) {
+    Record 'python-install-package' 'PASS' 'a typed package name reached the environment'
+} else {
+    Record 'python-install-package' 'FAIL' 'the typed package never arrived'
+}
+Remove-Item -Recurse -Force $pkgProj -ErrorAction SilentlyContinue
+if ($pkgVenv -ne '') { Remove-Item -Recurse -Force $pkgVenv -ErrorAction SilentlyContinue }
+
 # 31c. An unchanged requirements.txt installs nothing.
 # A person presses Run far more often than they edit their dependencies, and
 # a pip round trip every time would make the feature worse than not having

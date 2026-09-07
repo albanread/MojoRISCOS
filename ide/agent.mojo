@@ -41,8 +41,6 @@ from ide.toolchain import (
 )
 from ide.python_env import (
     clear_variables,
-    create_environment,
-    install_packages,
     project_location,
     python_report,
 )

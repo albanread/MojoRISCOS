@@ -81,10 +81,8 @@ from ide.toolchain import (
     toolchain_root,
 )
 from ide.python_env import (
-    create_environment,
     dirname,
     environment_ready,
-    install_packages,
     prepare_and_run,
     project_location,
     python_report,
@@ -5124,9 +5122,12 @@ def prompt_accept(hwnd: Int) raises -> String:
     if kind == ASK_SYMBOL:
         return goto_symbol(hwnd, text)
     if kind == ASK_PACKAGE:
-        return install_packages(
-            text, project_location(project_root(), document_path(hwnd))
-        )
+        # Through `python_install` and so through the chain, for the reason
+        # written out there: `install_packages` blocks the window procedure
+        # for as long as pip takes and reports only by returning a sentence.
+        # Typing a package name and watching the editor freeze is the same
+        # complaint as the menu item that did nothing.
+        return python_install(hwnd, text)
     if kind == ASK_OPEN:
         return open_path(hwnd, text)
     if kind == ASK_RENAME:
