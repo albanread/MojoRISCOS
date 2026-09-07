@@ -33,6 +33,15 @@ function Ask($command) {
     return (cmd /c "`"$Exe`" --cmd `"$command`" 2>&1" | Out-String)
 }
 
+# The win32 metadata is found through this variable and nothing guesses where
+# a 90 MB database lives. Unset, the toolchain view reports one component
+# missing and check 29 fails -- a true report of the shell that ran it, and a
+# false report of the code. `check-units.ps1` defaults it the same way.
+if (-not $env:MODULAR_MOJO_MAX_WINKB_PATH) {
+    $db = 'F:\bzs\external\+http_archive+winkb\windows_api.db'
+    if (Test-Path $db) { $env:MODULAR_MOJO_MAX_WINKB_PATH = $db }
+}
+
 Write-Host "== ide check =="
 if (-not (Test-Path $Exe)) { throw "not built: $Exe" }
 Write-Host "  exe: $Exe"
