@@ -140,5 +140,5 @@ if ($CertPfx -eq '') {
     Write-Host '    1. Settings > System > For developers > Developer Mode: On'
     Write-Host '    2. sign it with a self-signed certificate whose subject is the Publisher above, and'
     Write-Host '       import that certificate into Local Machine > Trusted People'
-    Write-Host '  then:  Add-AppxPackage -Path "' + $Out + '"'
+    Write-Host "  then:  Add-AppxPackage -Path `"$Out`""
 }
