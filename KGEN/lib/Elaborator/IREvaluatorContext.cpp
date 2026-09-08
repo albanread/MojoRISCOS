@@ -20,13 +20,23 @@
 #include "KGEN/POPDialect/POPAttrs.h"
 #include "KGEN/POPDialect/POPTypes.h"
 #include "KGEN/POPDialect/POPUtils.h"
+#include "KGEN/Support/Configuration.h"
 #include "KGEN/Support/NameMangling.h"
+#include "KGEN/Support/WinKB.h"
 #include "KGEN/TransformUtils/ManglingUtils.h"
 #include "Support/Compiler/DiagnosticHandler.h"
 #include "Support/StringExtras.h"
 #include "mlir/Support/DebugStringHelper.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/ScopeExit.h"
+
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/SHA256.h"
+
+#include "sqlite3.h"
+
+#include <mutex>
 
 using namespace M;
 using namespace KGEN;
@@ -830,6 +840,599 @@ FailureOr<TypedAttr> IREvaluatorContext::evaluateGetEnv(ParamOperatorAttr op) {
   }
 
   return result.get();
+}
+
+//===----------------------------------------------------------------------===//
+// Win32 metadata queries
+//===----------------------------------------------------------------------===//
+//
+// The Win32 API surface is 18,000 functions over 15,000 structs and 8,000 COM
+// interfaces, and all of it is already described precisely -- field offsets,
+// struct sizes, vtable order, interface IIDs -- in a metadata database. The
+// alternative to reading it here is generating megabytes of Mojo declarations
+// and keeping them in sync by hand, which is a second source of truth and
+// therefore a source of drift.
+//
+// Reading it during elaboration means a binding states one fact -- a name --
+// and the compiler supplies the rest. A struct whose declaration disagrees
+// with Windows fails to build instead of corrupting memory at the first call.
+//
+// The database is opened lazily and only if a query is actually evaluated, so
+// a build that uses no Win32 metadata never touches it.
+
+namespace {
+
+/// A lazily-opened, read-only handle on the Win32 metadata database, shared
+/// for the life of the process. Elaboration is concurrent, so the open is
+/// guarded; the queries themselves are reads against an immutable file.
+class WinKBDatabase {
+public:
+  /// Returns the shared instance, opening the database on first use.
+  static WinKBDatabase &get() {
+    static WinKBDatabase instance;
+    return instance;
+  }
+
+  /// Run one query. Returns the error text on failure so the caller can put it
+  /// in a diagnostic pointing at the source that asked.
+  llvm::Expected<int64_t> queryInt(StringRef query, ArrayRef<StringRef> args);
+
+  llvm::Expected<std::string> queryString(StringRef query,
+                                          ArrayRef<StringRef> args);
+
+private:
+  WinKBDatabase() = default;
+  llvm::Error openLocked();
+  llvm::Expected<sqlite3_stmt *> prepare(StringRef query,
+                                         ArrayRef<StringRef> args);
+
+  std::mutex mutex;
+  sqlite3 *db = nullptr;
+  bool attempted = false;
+  std::string openError;
+  std::string openedPath;
+  std::string cachedHash;
+};
+
+/// The queries this exposes, by the name Mojo passes as the first operand.
+///
+/// Each is stated once here rather than assembled from fragments: a binding
+/// asks for "struct_size", not for SQL, so the schema stays an implementation
+/// detail of the compiler and a metadata layout change is a one-line fix here
+/// instead of a break in every caller.
+struct WinKBQueryDef {
+  StringRef name;
+  unsigned argCount;
+  StringRef sql;
+};
+
+constexpr StringRef kStructSizeSQL =
+    "SELECT size_bits / 8 FROM types WHERE type_name = ?1 AND kind = 'struct'";
+constexpr StringRef kStructAlignSQL =
+    "SELECT align_bits / 8 FROM types WHERE type_name = ?1 AND kind = 'struct'";
+constexpr StringRef kFieldOffsetSQL =
+    "SELECT f.byte_offset FROM struct_fields f "
+    "JOIN types t ON t.type_id = f.struct_type_id "
+    "WHERE t.type_name = ?1 AND f.field_name = ?2";
+// COM method lookups walk the interface's inheritance chain: a method
+// asked of IStream may be defined on ISequentialStream or IUnknown, and
+// interface_methods rows live on the DEFINING interface. vtable_index is
+// already absolute across the chain, so the walk changes which row is
+// found, never the number it holds. ORDER BY depth LIMIT 1 makes the
+// nearest definition win, matching the Mac ports' method CTE. The seed
+// filters on `iid IS NOT NULL`: the winmd importer's kind classifier
+// occasionally mislabels an interface, and the IID is the one signal that
+// is definitively COM (the Modula-2 pipeline's lesson, recorded in its
+// db.rs).
+#define WINKB_IFACE_CHAIN_CTE                                                  \
+  "WITH RECURSIVE chain(type_id, qualified_name, depth) AS ( "                \
+  "  SELECT type_id, qualified_name, 0 FROM types "                           \
+  "   WHERE type_name = ?1 AND iid IS NOT NULL "                              \
+  "  UNION ALL "                                                              \
+  "  SELECT t.type_id, t.qualified_name, c.depth + 1 "                        \
+  "    FROM chain c "                                                         \
+  "    JOIN types t0 ON t0.type_id = c.type_id "                              \
+  "    JOIN types t ON t.qualified_name = t0.base_qualified_name "            \
+  ") "
+#define WINKB_CHAIN_METHOD_ID                                                  \
+  "(SELECT m.method_id FROM interface_methods m "                             \
+  " JOIN chain c ON c.type_id = m.interface_type_id "                         \
+  " WHERE m.method_name = ?2 ORDER BY c.depth LIMIT 1)"
+
+constexpr StringRef kVtableIndexSQL =
+    WINKB_IFACE_CHAIN_CTE
+    "SELECT m.vtable_index FROM interface_methods m "
+    "JOIN chain c ON c.type_id = m.interface_type_id "
+    "WHERE m.method_name = ?2 ORDER BY c.depth LIMIT 1";
+constexpr StringRef kComMethodRetTypeSQL =
+    WINKB_IFACE_CHAIN_CTE
+    "SELECT m.return_type_name FROM interface_methods m "
+    "JOIN chain c ON c.type_id = m.interface_type_id "
+    "WHERE m.method_name = ?2 ORDER BY c.depth LIMIT 1";
+constexpr StringRef kComMethodParamCountSQL =
+    WINKB_IFACE_CHAIN_CTE
+    "SELECT COUNT(*) FROM interface_method_params p "
+    "WHERE p.method_id = " WINKB_CHAIN_METHOD_ID;
+constexpr StringRef kComMethodParamTypeSQL =
+    WINKB_IFACE_CHAIN_CTE
+    "SELECT p.type_name FROM interface_method_params p "
+    "WHERE p.ordinal = ?3 AND p.method_id = " WINKB_CHAIN_METHOD_ID;
+// And its name, which is Windows' own and Hungarian. Only the editor asks for
+// this: a binding does not care what a parameter is called, but a completion
+// that offers `arg0, arg1, arg2` is worse than one that offers something a
+// person can read.
+constexpr StringRef kComMethodParamNameSQL =
+    WINKB_IFACE_CHAIN_CTE
+    "SELECT p.param_name FROM interface_method_params p "
+    "WHERE p.ordinal = ?3 AND p.method_id = " WINKB_CHAIN_METHOD_ID;
+// Total absolute slot count of an interface's vtable, inherited slots
+// included -- what a static vtable for the interface must provide.
+constexpr StringRef kComMethodCountSQL =
+    WINKB_IFACE_CHAIN_CTE
+    "SELECT MAX(m.vtable_index) + 1 FROM interface_methods m "
+    "JOIN chain c ON c.type_id = m.interface_type_id";
+// Does this interface (or its chain) declare this method? Answers 0 or 1
+// rather than failing, so a caller can ASK -- which is what dispatching a
+// method across several implemented interfaces needs, and what vtable_index
+// deliberately cannot do.
+// The method name occupying a given absolute vtable slot, so an incomplete
+// object can say WHICH slots are unfilled rather than how many. Nearest
+// definition wins, as everywhere else on the chain.
+// Every IID in an interface's inheritance chain, itself included, comma
+// separated. QueryInterface must answer for the bases too -- a client holding
+// an IStream may legitimately ask for ISequentialStream -- and asking once
+// for the whole chain avoids unrolling an unknown depth at comptime.
+constexpr StringRef kComChainIIDsSQL =
+    WINKB_IFACE_CHAIN_CTE
+    "SELECT group_concat(t.iid) FROM chain c "
+    "JOIN types t ON t.type_id = c.type_id WHERE t.iid IS NOT NULL";
+constexpr StringRef kComMethodAtSlotSQL =
+    WINKB_IFACE_CHAIN_CTE
+    "SELECT m.method_name FROM interface_methods m "
+    "JOIN chain c ON c.type_id = m.interface_type_id "
+    "WHERE m.vtable_index = ?2 ORDER BY c.depth LIMIT 1";
+constexpr StringRef kComHasMethodSQL =
+    WINKB_IFACE_CHAIN_CTE
+    "SELECT CASE WHEN EXISTS (SELECT 1 FROM interface_methods m "
+    "JOIN chain c ON c.type_id = m.interface_type_id "
+    "WHERE m.method_name = ?2) THEN 1 ELSE 0 END";
+// The SETTER a plain property name means: `obj.options = x` on an
+// IACList2 names SetOptions. The name is assembled in SQL -- 'Set' plus
+// the property with its first letter capitalised -- because string surgery
+// belongs where it always evaluates, not in comptime Mojo where it may not
+// fold (the Mac ports' lesson, already written on type_width above). The
+// chain walk means an inherited setter answers at the derived interface's
+// name. A property with no setter leaves no row, and the elaborator's
+// own no-'com_setter_for' note is the diagnostic: it names the interface
+// and the property, which is the sentence a typo wants to produce.
+constexpr StringRef kComSetterForSQL =
+    WINKB_IFACE_CHAIN_CTE
+    "SELECT m.method_name FROM interface_methods m "
+    "JOIN chain c ON c.type_id = m.interface_type_id "
+    "WHERE m.method_name = "
+    "('Set' || upper(substr(?2, 1, 1)) || substr(?2, 2)) "
+    "ORDER BY c.depth LIMIT 1";
+constexpr StringRef kComInterfaceBaseSQL =
+    "SELECT t2.type_name FROM types t1 "
+    "JOIN types t2 ON t2.qualified_name = t1.base_qualified_name "
+    "WHERE t1.type_name = ?1 AND t1.iid IS NOT NULL";
+// Width in bytes of any named type -- struct, enum, or interface pointer
+// target -- for comptime argument classification. struct_size stays
+// struct-only on purpose; this one answers for everything the metadata
+// sizes.
+// Matches the short or the qualified spelling, because COM parameter
+// types arrive qualified ("Windows.Win32.System.Com.STREAM_SEEK") and
+// string surgery belongs in SQL, where it always evaluates, not in
+// comptime Mojo, where it may not fold (the Mac ports' lesson).
+constexpr StringRef kTypeWidthSQL =
+    "SELECT size_bits / 8 FROM types "
+    "WHERE (type_name = ?1 OR qualified_name = ?1) "
+    "AND size_bits IS NOT NULL";
+constexpr StringRef kInterfaceIIDSQL =
+    "SELECT iid FROM types WHERE type_name = ?1 AND iid IS NOT NULL";
+constexpr StringRef kFunctionDLLSQL =
+    "SELECT dll_name FROM functions WHERE function_name = ?1";
+
+// Named constants come from two tables. Plain #define-style values live in
+// `constants`; flag and enumeration members live in `enum_members`, and the
+// two namespaces overlap only rarely, so `constants` wins by ordinal.
+//
+// COALESCE(value_i64, value_u64) prefers the SIGNED reading, which is the one
+// that survives narrowing in both directions: HKEY_LOCAL_MACHINE has to
+// sign-extend to 0xFFFFFFFF80000002 as a pointer, while a flag mask such as
+// 0x80000000 is narrowed by the caller's UInt32() and keeps its bits either
+// way. Preferring the unsigned reading would break the first case silently.
+constexpr StringRef kConstantValueSQL =
+    "SELECT value FROM ("
+    "  SELECT COALESCE(value_i64, value_u64) AS value, 0 AS rank"
+    "    FROM constants WHERE constant_name = ?1"
+    "     AND value_kind IN ('int', 'uint')"
+    "  UNION ALL"
+    "  SELECT COALESCE(value_i64, value_u64) AS value, 1 AS rank"
+    "    FROM enum_members WHERE member_name = ?1"
+    ") WHERE value IS NOT NULL ORDER BY rank LIMIT 1";
+constexpr StringRef kConstantTextSQL =
+    "SELECT value_text FROM constants "
+    "WHERE constant_name = ?1 AND value_kind = 'string'";
+
+constexpr StringRef kSchemaVersionSQL =
+    "SELECT value FROM schema_meta WHERE key = 'schema_version'";
+
+} // namespace
+
+//===----------------------------------------------------------------------===//
+// The metadata, for tools that are not the elaborator
+//
+// Sprint 2.4. The language server offers the unimplemented methods of an
+// interface as completions inside a `class` body, with the parameter types the
+// database records. Same database, same queries, different caller -- see
+// KGEN/Support/WinKB.h for why it is worth exposing.
+//===----------------------------------------------------------------------===//
+
+namespace M {
+namespace KGEN {
+
+/// The Mojo spelling of a metadata type, for a COM method parameter.
+///
+/// Everything a COM method takes is either a pointer or a value of some width,
+/// and the class surface's own `_check_arg` validates exactly that: the width.
+/// So the width is what this has to get right, and it comes from the database
+/// rather than from a table somebody typed.
+///
+/// The database has no signedness -- the column exists and is null for every
+/// row -- so a four-byte value becomes UInt32. That is what the width check
+/// accepts and what every existing hand-written class body already says.
+static std::string mojoTypeFor(StringRef metadataType) {
+  // A pointer is a pointer. The class surface takes them as Int, because
+  // that is what a vtable slot passes and what every implementation in this
+  // tree already spells.
+  if (metadataType.ends_with("*"))
+    return "Int";
+
+  // The primitive spellings carry their width in their name and have no row
+  // of their own in `types` -- size_bits is null for `u32`.
+  static const struct { StringRef meta, mojo; } kPrimitives[] = {
+      {"u8", "UInt8"},     {"i8", "Int8"},      {"u16", "UInt16"},
+      {"i16", "Int16"},    {"u32", "UInt32"},   {"i32", "Int32"},
+      {"u64", "UInt64"},   {"i64", "Int64"},    {"f32", "Float32"},
+      {"f64", "Float64"},  {"usize", "Int"},    {"isize", "Int"},
+  };
+  for (const auto &prim : kPrimitives)
+    if (metadataType == prim.meta)
+      return prim.mojo.str();
+
+  // Everything else -- an enum, a struct passed by value, an interface -- is
+  // whatever width the database says. A struct wider than a register is
+  // passed by address on this ABI and so is an Int too.
+  auto widthOr = WinKBDatabase::get().queryInt("type_width", {metadataType});
+  if (!widthOr) {
+    llvm::consumeError(widthOr.takeError());
+    return "Int";
+  }
+  switch (*widthOr) {
+  case 1:
+    return "UInt8";
+  case 2:
+    return "UInt16";
+  case 4:
+    return "UInt32";
+  default:
+    return "Int";
+  }
+}
+
+/// A readable Mojo name for a Windows parameter name.
+///
+/// The database has Windows' own names, which are Hungarian: `grfKeyState`,
+/// `pdwEffect`, `pDataObj`. Offering those verbatim in a completion would
+/// teach a naming convention this repository does not use, so the prefix comes
+/// off and the rest is lower-cased with underscores. The NAME is cosmetic --
+/// a person renames it freely -- while the type is not, which is why only one
+/// of the two is invented here.
+static std::string mojoNameFor(StringRef windowsName) {
+  if (windowsName.empty())
+    return "arg";
+  // Strip a leading run of Hungarian: lower-case letters before the first
+  // upper-case one, when there is an upper-case one to follow.
+  size_t at = 0;
+  while (at < windowsName.size() && llvm::isLower(windowsName[at]))
+    ++at;
+  StringRef rest = (at < windowsName.size()) ? windowsName.drop_front(at)
+                                             : windowsName;
+
+  // CamelCase to snake_case.
+  std::string out;
+  for (size_t i = 0; i < rest.size(); ++i) {
+    char c = rest[i];
+    if (llvm::isUpper(c)) {
+      if (i)
+        out += '_';
+      out += llvm::toLower(c);
+    } else {
+      out += c;
+    }
+  }
+  return out.empty() ? "arg" : out;
+}
+
+llvm::Expected<std::vector<WinKBMethod>>
+winkbInterfaceMethods(StringRef interfaceName) {
+  auto &db = WinKBDatabase::get();
+  auto countOr = db.queryInt("com_method_count", {interfaceName});
+  if (!countOr)
+    return countOr.takeError();
+
+  std::vector<WinKBMethod> methods;
+  // Slots 0, 1 and 2 are IUnknown's -- QueryInterface, AddRef, Release -- and
+  // are synthesised for every object rather than implemented by anyone. A
+  // completion that offered them would be offering to break the object.
+  for (int64_t slot = 3; slot < *countOr; ++slot) {
+    std::string slotText = std::to_string(slot);
+    auto nameOr = db.queryString("com_method_at_slot", {interfaceName, slotText});
+    if (!nameOr) {
+      llvm::consumeError(nameOr.takeError());
+      continue;
+    }
+    WinKBMethod method;
+    method.name = *nameOr;
+    method.slot = static_cast<int>(slot);
+    if (method.name.empty())
+      continue;
+
+    auto paramsOr =
+        db.queryInt("com_method_param_count", {interfaceName, method.name});
+    if (!paramsOr) {
+      llvm::consumeError(paramsOr.takeError());
+      methods.push_back(std::move(method));
+      continue;
+    }
+    for (int64_t i = 0; i < *paramsOr; ++i) {
+      auto typeOr = db.queryString(
+          "com_method_param_type", {interfaceName, method.name, std::to_string(i)});
+      if (!typeOr) {
+        llvm::consumeError(typeOr.takeError());
+        break;
+      }
+      method.paramTypes.push_back(*typeOr);
+      auto nameOr2 = db.queryString(
+          "com_method_param_name",
+          {interfaceName, method.name, std::to_string(i)});
+      if (nameOr2) {
+        method.paramNames.push_back(*nameOr2);
+      } else {
+        llvm::consumeError(nameOr2.takeError());
+        method.paramNames.push_back(std::string());
+      }
+    }
+    methods.push_back(std::move(method));
+  }
+  return methods;
+}
+
+std::string winkbMojoSignature(const WinKBMethod &method) {
+  std::string out = "(mut self";
+  for (size_t i = 0; i < method.paramTypes.size(); ++i) {
+    out += ", ";
+    out += (i < method.paramNames.size() && !method.paramNames[i].empty())
+               ? mojoNameFor(method.paramNames[i])
+               : ("arg" + std::to_string(i));
+    out += ": ";
+    out += mojoTypeFor(method.paramTypes[i]);
+  }
+  out += ") raises";
+  return out;
+}
+
+} // namespace KGEN
+} // namespace M
+
+namespace {
+
+const WinKBQueryDef kQueries[] = {
+    {"db_schema_version", 0, kSchemaVersionSQL},
+    {"struct_size", 1, kStructSizeSQL},
+    {"struct_align", 1, kStructAlignSQL},
+    {"field_offset", 2, kFieldOffsetSQL},
+    {"vtable_index", 2, kVtableIndexSQL},
+    {"com_method_ret_type", 2, kComMethodRetTypeSQL},
+    {"com_method_param_count", 2, kComMethodParamCountSQL},
+    {"com_method_param_type", 3, kComMethodParamTypeSQL},
+    {"com_method_param_name", 3, kComMethodParamNameSQL},
+    {"com_method_count", 1, kComMethodCountSQL},
+    {"com_interface_base", 1, kComInterfaceBaseSQL},
+    {"com_has_method", 2, kComHasMethodSQL},
+    {"com_setter_for", 2, kComSetterForSQL},
+    {"com_method_at_slot", 2, kComMethodAtSlotSQL},
+    {"com_chain_iids", 1, kComChainIIDsSQL},
+    {"type_width", 1, kTypeWidthSQL},
+    {"interface_iid", 1, kInterfaceIIDSQL},
+    {"function_dll", 1, kFunctionDLLSQL},
+    {"constant_value", 1, kConstantValueSQL},
+    {"constant_text", 1, kConstantTextSQL},
+};
+
+llvm::Error WinKBDatabase::openLocked() {
+  if (attempted)
+    return openError.empty() ? llvm::Error::success()
+                             : llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                                       openError);
+  attempted = true;
+
+  ErrorOr<MojoConfig> configOr = MojoConfig::open();
+  if (configOr.isError()) {
+    openError = "cannot read the Mojo configuration to locate the Win32 "
+                "metadata database";
+    return llvm::createStringError(llvm::inconvertibleErrorCode(), openError);
+  }
+  // The config owns the string, so copy it before the config goes out of scope.
+  std::string path = configOr.get().getWinKBPath().str();
+  if (path.empty()) {
+    openError = "no Win32 metadata database is configured; set "
+                "MODULAR_MOJO_MAX_WINKB_PATH to windows_api.db";
+    return llvm::createStringError(llvm::inconvertibleErrorCode(), openError);
+  }
+
+  // Read-only, and never created: a missing database is a configuration error
+  // to report, not an empty one to invent and then answer wrongly from.
+  openedPath = path;
+  int rc = sqlite3_open_v2(path.c_str(), &db, SQLITE_OPEN_READONLY,
+                           nullptr);
+  if (rc != SQLITE_OK) {
+    openError = "cannot open the Win32 metadata database at '" + path +
+                "': " + std::string(db ? sqlite3_errmsg(db) : "out of memory");
+    if (db) {
+      sqlite3_close(db);
+      db = nullptr;
+    }
+    return llvm::createStringError(llvm::inconvertibleErrorCode(), openError);
+  }
+  return llvm::Error::success();
+}
+
+llvm::Expected<sqlite3_stmt *> WinKBDatabase::prepare(StringRef query,
+                                                      ArrayRef<StringRef> args) {
+  const WinKBQueryDef *def = nullptr;
+  for (const auto &candidate : kQueries)
+    if (candidate.name == query)
+      def = &candidate;
+
+  if (!def) {
+    std::string known;
+    for (const auto &candidate : kQueries)
+      known += (known.empty() ? "" : ", ") + candidate.name.str();
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        "unknown Win32 metadata query '" + query.str() + "'; known queries: " +
+            known);
+  }
+
+  if (args.size() != def->argCount)
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        "Win32 metadata query '" + query.str() + "' takes " +
+            std::to_string(def->argCount) + " argument(s), got " +
+            std::to_string(args.size()));
+
+  if (auto err = openLocked())
+    return std::move(err);
+
+  sqlite3_stmt *stmt = nullptr;
+  if (sqlite3_prepare_v2(db, def->sql.str().c_str(), -1, &stmt, nullptr) !=
+      SQLITE_OK)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   StringRef(sqlite3_errmsg(db)));
+
+  for (auto [index, arg] : llvm::enumerate(args))
+    sqlite3_bind_text(stmt, static_cast<int>(index + 1), arg.data(),
+                      static_cast<int>(arg.size()), SQLITE_TRANSIENT);
+  return stmt;
+}
+
+llvm::Expected<int64_t> WinKBDatabase::queryInt(StringRef query,
+                                                ArrayRef<StringRef> args) {
+  std::lock_guard<std::mutex> lock(mutex);
+  auto stmt = prepare(query, args);
+  if (!stmt)
+    return stmt.takeError();
+  llvm::scope_exit cleanup([&] { sqlite3_finalize(*stmt); });
+
+  int rc = sqlite3_step(*stmt);
+  if (rc != SQLITE_ROW)
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        "the Win32 metadata has no '" + query.str() + "' for " +
+            llvm::join(args, ", "));
+  // A NULL column means the metadata knows the entity but not this property,
+  // which is a different failure from not knowing the entity at all.
+  if (sqlite3_column_type(*stmt, 0) == SQLITE_NULL)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "the Win32 metadata records no " +
+                                       query.str() + " for " +
+                                       llvm::join(args, ", "));
+  return sqlite3_column_int64(*stmt, 0);
+}
+
+llvm::Expected<std::string>
+WinKBDatabase::queryString(StringRef query, ArrayRef<StringRef> args) {
+  std::lock_guard<std::mutex> lock(mutex);
+
+  // The reproducibility pin: a compiler whose semantics depend on a database
+  // must be able to say WHICH database. Hashed lazily -- the file is 86 MB --
+  // and cached for the process, so release tooling and canary programs can
+  // record the exact metadata revision a binary was built against.
+  if (query == "db_hash") {
+    if (!args.empty())
+      return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                     "'db_hash' takes no arguments");
+    if (auto err = openLocked())
+      return std::move(err);
+    if (cachedHash.empty()) {
+      llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> bufferOr =
+          llvm::MemoryBuffer::getFile(openedPath, /*IsText=*/false);
+      if (!bufferOr)
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            "cannot read the Win32 metadata database for hashing");
+      llvm::SHA256 sha;
+      sha.update((*bufferOr)->getBuffer());
+      cachedHash = llvm::toHex(sha.final(), /*LowerCase=*/true);
+    }
+    return cachedHash;
+  }
+  auto stmt = prepare(query, args);
+  if (!stmt)
+    return stmt.takeError();
+  llvm::scope_exit cleanup([&] { sqlite3_finalize(*stmt); });
+
+  int rc = sqlite3_step(*stmt);
+  if (rc != SQLITE_ROW || sqlite3_column_type(*stmt, 0) == SQLITE_NULL)
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(),
+        "the Win32 metadata has no '" + query.str() + "' for " +
+            llvm::join(args, ", "));
+
+  const auto *text = sqlite3_column_text(*stmt, 0);
+  return std::string(reinterpret_cast<const char *>(text),
+                     sqlite3_column_bytes(*stmt, 0));
+}
+
+} // namespace
+
+FailureOr<TypedAttr>
+IREvaluatorContext::evaluateWinKBQuery(ParamOperatorAttr op) {
+  SmallVector<StringRef> operands;
+  for (auto operand : op.getOperands()) {
+    auto str = dyn_cast<StringAttr>(operand);
+    if (!str) {
+      emitError({*errorLoc, "'winkb_query' operand did not narrow to a "
+                            "constant string"});
+      return failure();
+    }
+    operands.push_back(str.getValue());
+  }
+
+  StringRef query = operands.front();
+  ArrayRef<StringRef> args = ArrayRef<StringRef>(operands).drop_front();
+
+  auto &database = WinKBDatabase::get();
+
+  if (::isa<IndexType>(op.getType())) {
+    auto value = database.queryInt(query, args);
+    if (!value) {
+      emitError({*errorLoc, llvm::toString(value.takeError())});
+      return failure();
+    }
+    return cast<TypedAttr>(
+        IntegerAttr::get(IndexType::get(mlirCtx), *value));
+  }
+
+  auto value = database.queryString(query, args);
+  if (!value) {
+    emitError({*errorLoc, llvm::toString(value.takeError())});
+    return failure();
+  }
+  return cast<TypedAttr>(
+      StringAttr::get(*value, StringType::get(mlirCtx)));
 }
 
 // See if we can decode the first 'numBytes' of the memory blob into a

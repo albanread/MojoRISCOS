@@ -116,9 +116,18 @@ def _run_cuda_external_function(ctx: DeviceContext) raises:
 // Cuda compilation tools, release 12.6, V12.6.85
 // Based on NVVM 7.0.1
 //
+// Retargeted from the generator's `.version 8.5` / `.target sm_80`, for the
+// same reason the two-entry-point module below was lowered: the kernel is a
+// plain vector add and every instruction in it -- mad.lo.s32, setp, cvta,
+// ld.global.f32, add.f32 -- long predates sm_80. Declaring the generating
+// toolkit's architecture made a portable module refuse to load on any card
+// below Ampere, and `.target` excludes hardware in a way `.version` alone
+// does not: on a Turing part the load failed with CUDA error 218, a PTX JIT
+// compilation failure, naming nothing.
+//
 
-.version 8.5
-.target sm_80
+.version 6.3
+.target sm_75
 .address_size 64
 
 	// .globl	_Z9vectorAddPKfS0_Pfi
@@ -215,9 +224,11 @@ def _run_cuda_external_function_distinct_entry_points(
     ):
         pass
 
-    # One module, two entry points. Generated with `nvcc -arch=sm_75 -ptx`.
+    # One module, two entry points.  It uses only the PTX 6.3 instruction set
+    # that introduced sm_75; declaring the generator's newer ISA version makes
+    # otherwise portable PTX needlessly dependent on a newer driver.
     var ptx = """
-.version 8.8
+.version 6.3
 .target sm_75
 .address_size 64
 

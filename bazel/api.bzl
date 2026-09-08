@@ -47,8 +47,9 @@ modular_run_binary_test = _modular_run_binary_test
 modular_versioned_expand_template = _modular_versioned_expand_template
 mojo_overlay_layer = _mojo_overlay_layer
 mojo_overlay_srcs = _mojo_overlay_srcs
-mojo_test = _mojo_test
-mojo_filecheck_test = _mojo_filecheck_test
+# NOTE: mojo_test and mojo_filecheck_test are NOT re-exported here. They take
+# `deps` and so must route them through _process_mojo_deps like their
+# mojo_library/mojo_binary siblings; see the wrappers further down.
 modular_sphinx_docs = _modular_sphinx_docs
 mojo_test_environment = _mojo_test_environment
 pkg_files = _pkg_files
@@ -120,12 +121,18 @@ def _process_mojo_deps(deps):
     new_deps = []
     imports_max = False
     needs_compiler_rt = False
+    needs_device_runtime = False
     for dep in deps:
         if dep in INTERNAL_PACKAGES:
             new_deps.append("@modular_wheel//:" + dep.split("/")[-1])
             imports_max = True
         elif dep == "//MLRT:Driver/DeviceContext":
-            new_deps.append("@modular_wheel//:AsyncRTMojoBindings_lib")
+            # Upstream remaps this to Modular's prebuilt wheel, which does not
+            # exist for native Windows and which this fork's licensing bright
+            # line forbids introducing regardless. Select an independent
+            # source-built implementation of the same AsyncRT_* ABI for each
+            # Windows accelerator family.
+            needs_device_runtime = True
         elif dep == "//KGEN:CompilerRT":
             needs_compiler_rt = True
         else:
@@ -140,13 +147,25 @@ def _process_mojo_deps(deps):
             "//conditions:default": ["@modular_wheel//:CompilerRT_lib"],
         })
 
+    if needs_device_runtime:
+        new_deps += select({
+            "@mojo_gpu_toolchains//:nvidia_gpu": ["//nvptx/runtime:nvptxrt"],
+            "//conditions:default": ["//dragon/runtime:dragonrt"],
+        })
+
     return new_deps
 
 # Ignore internal_deps for public builds
 # buildifier: disable=unused-variable
 def modular_cc_binary(data = [], deps = [], internal_deps = [], defines = [], local_defines = [], **kwargs):
     _modular_cc_binary(
-        local_defines = _process_defines(local_defines),
+        # Executables consume the project's static libraries directly on
+        # Windows. Their source must therefore see declarations as ordinary
+        # symbols, not as imports from a DLL.
+        local_defines = _process_defines(local_defines) + select({
+            "@platforms//os:windows": ["MODULAR_NO_EXPORT"],
+            "//conditions:default": [],
+        }),
         defines = _process_defines(defines),
         **(kwargs | _process_cc_deps(
             data = data,
@@ -164,7 +183,21 @@ def modular_cc_library(name, data = [], deps = [], internal_deps = [], defines =
 
     _modular_cc_library(
         name = name,
-        local_defines = _process_defines(local_defines),
+        # MODULAR_NO_EXPORT on Windows. SymbolExport.h expands
+        # MODULAR_CXX_EXPORT to __declspec(dllimport) whenever
+        # MODULAR_BUILDING_LIBRARY is absent, and that define is only set when
+        # building a shared library, so every static library compiled its own
+        # definitions as dllimport and mojo.exe failed to link against them.
+        # MODULAR_NO_EXPORT is the switch that header already provides for this
+        # case, described there as needed because MSVC does not allow
+        # dllimport/dllexport on static library members.
+        #
+        # Appended after _process_defines rather than passed through it, since
+        # that helper cannot parse a select nested inside a select.
+        local_defines = _process_defines(local_defines) + select({
+            "@platforms//os:windows": ["MODULAR_NO_EXPORT"],
+            "//conditions:default": [],
+        }),
         defines = _process_defines(defines),
         **(kwargs | _process_cc_deps(
             data = data,
@@ -225,6 +258,31 @@ def mojo_shared_library(deps = [], use_production_compiler_for_asan = None, **kw
 
 def mojo_binary(deps = [], **kwargs):
     _mojo_binary(
+        deps = _process_mojo_deps(deps),
+        **kwargs
+    )
+
+# mojo_test and mojo_filecheck_test were plain re-exports, which made them the
+# only dep-taking macros in this family that did NOT rewrite INTERNAL_PACKAGES.
+# A test depending on an internal-only package therefore kept the raw
+# `//Kernels/...` label, which does not exist in the open-source tree, and
+# analysis died with "no such package 'Kernels/lib/attn_res'" -- aborting any
+# `bazel test` or `cquery` over //max/kernels/test/gpu/... before a single test
+# ran. Five targets in the fuzz package hit this.
+#
+# Routing them through _process_mojo_deps rewrites the label to
+# @modular_wheel//:<name>, which on Windows resolves to :unavailable_on_windows
+# (target_compatible_with = ["@platforms//:incompatible"]), so those targets are
+# cleanly SKIPPED as unavailable rather than crashing the graph. Upstream never
+# sees this because its internal build has the real //Kernels/ packages.
+def mojo_test(deps = [], **kwargs):
+    _mojo_test(
+        deps = _process_mojo_deps(deps),
+        **kwargs
+    )
+
+def mojo_filecheck_test(deps = [], **kwargs):
+    _mojo_filecheck_test(
         deps = _process_mojo_deps(deps),
         **kwargs
     )

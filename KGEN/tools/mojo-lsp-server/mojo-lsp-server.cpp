@@ -24,8 +24,6 @@
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
 
-#include <unistd.h>
-
 using namespace M;
 using namespace M::KGEN::LIT;
 using namespace llvm::lsp;
@@ -37,9 +35,13 @@ int main(int argc, char **argv) {
   KGEN::installOOMHandler();
 
   llvm::setBugReportMsg(
-      "Please submit a bug report to https://github.com/modular/modular/issues "
-      "and include the crash backtrace along with all the relevant source "
-      "codes with the contents they had at crash time.\n");
+      "The Mojo language server crashed. This is the WINMOJO x64 fork, "
+      "which Modular does not support, so please do not report this "
+      "upstream.\n"
+      "If the fork is at fault, file it at\n"
+      "  https://github.com/albanread/WINMOJOX64Blackwell/issues\n"
+      "including the crash backtrace and the source files with the contents "
+      "they had at crash time.\n");
 
   llvm::cl::OptionCategory category{"Mojo language server options"};
 
@@ -132,7 +134,11 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  if (isatty(STDOUT_FILENO)) {
+  // llvm::sys::Process rather than isatty(STDOUT_FILENO): the POSIX
+  // spelling needs <unistd.h>, which Windows does not have, and this
+  // was the only thing in the file that wanted it. Process.h was
+  // already included for other reasons.
+  if (llvm::sys::Process::StandardOutIsDisplayed()) {
     llvm::errs()
         << "The Mojo Language Server is not intended to be executed directly. "
            "Please refer to your editor documentation for instructions on "

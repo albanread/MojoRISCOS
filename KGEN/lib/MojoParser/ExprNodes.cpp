@@ -59,6 +59,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Support/IndentedOstream.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/Support/SaveAndRestore.h"
@@ -3741,6 +3742,70 @@ static AnyValue emitBinOpCall(ASTExprAnd<AnyValue> lhs,
 /// The walrus := operator in Python requires the left side to be a simple
 /// identifier, but Mojo allows arbitrary lvalues like the assign stmt.
 AnyValue BinOpNode::emitAssign(ExprDest &dest, IREmitter &emitter) const {
+  // winmojo: property WRITES through `__setattr_param__` -- the
+  // assignment-shaped sibling of `__getattr_param__`. `view.options = x` on
+  // a type that declares the hook re-dispatches onto
+  // `view.__setattr_param__["options"](x)`: the property name arrives as a
+  // string parameter, so what the write means is settled against the
+  // metadata database at compile time -- for COM, the Set<name> setter --
+  // which a plain `__setattr__` receiving a runtime name could never do.
+  //
+  // The interception lives here rather than in the LValue machinery: a
+  // property write consumes the value and cannot produce an address, so it
+  // has to be caught where both sides of the `=` are in hand.
+  //
+  // Restricted to a bare-variable base: the base is emitted to learn its
+  // type, and when the hook does not apply the ordinary path below emits it
+  // again. A second variable load is harmless; a second call with side
+  // effects would not be. `f().prop = x` keeps the ordinary path until
+  // someone wants it enough to solve the double emission.
+  if (auto *attr = dyn_cast<AttributeRefNode>(lhs->getWithoutParens())) {
+    if (isa<DeclRefNode>(attr->base->getWithoutParens())) {
+      AnyValue baseVal = emitter.emitExpr(attr->base, EC_AttributeRefBase);
+      if (baseVal) {
+        if (auto baseCVal = baseVal.getIfCValue()) {
+          ASTType baseType = baseCVal.getRValueType();
+          // Only names the type does not already declare: an assignment to
+          // a real field is a field write, not a property write. Without
+          // this, `self._this = x` inside the very struct that declares the
+          // hook would re-enter it -- a field assignment cannot raise, the
+          // property path can, and the call would refuse to compile in the
+          // ordinary places.
+          if (emitter.shared.typeHasMember(baseType, "__setattr_param__",
+                                           getLoc()) &&
+              !emitter.shared.typeHasMember(baseType, attr->spelling,
+                                            getLoc())) {
+            // The name as a quoted string literal, so it arrives at the
+            // hook as the compile-time parameter the query needs.
+            std::string quoted = ("\"" + attr->spelling.str() + "\"");
+            StringRef spelling(quoted);
+            auto *nameNode =
+                new StringLiteralNode(ArrayRef<StringRef>(spelling));
+            llvm::scope_exit freeNode([&] { delete nameNode; });
+            Operand nameOperand(nameNode, attr->getLoc(),
+                                ArgUnpackStyle::kPositional);
+            Operand valueOperand(rhs, rhs->getLoc(),
+                                 ArgUnpackStyle::kPositional);
+
+            SyntheticNode baseNode(getLoc(), baseVal);
+            AttributeRefNode hookNode(
+                &baseNode, getLoc(),
+                StringAttr::get(emitter.getContext(), "__setattr_param__"));
+            SmallVector<Operand, 2> subOperands = {nameOperand};
+            SubscriptNode paramNode(&hookNode, getLoc(), subOperands,
+                                    getLoc());
+            SmallVector<Operand, 2> callOperands = {valueOperand};
+            CallNode callNode(&paramNode, getLoc(), callOperands,
+                              rhs->getLoc());
+            auto result = emitter.emitExpr(&callNode, dest);
+            freeNode.release();
+            return result;
+          }
+        }
+      }
+    }
+  }
+
   // Assignments might need to infer the LHS from the RHS when the LHS is
   // unresolved, and the RHS from the LHS when it is known:
   //
@@ -3779,7 +3844,7 @@ AnyValue BinOpNode::emitAssign(ExprDest &dest, IREmitter &emitter) const {
   // Figure out if the LHS is syntactically a var pattern.
   auto isVarPat = [&](ExprNode *expr) -> bool {
     while (1) {
-      if (expr->kind == kVarPat)
+      if (expr->kind == kVarPat || expr->kind == kLetPat)
         return true;
       if (auto paren = dyn_cast<ParenNode>(expr)) {
         expr = paren->subExpr;
@@ -4236,7 +4301,7 @@ UnaryOpNode::emitLValueIfImplicitlyTyped(IREmitter &emitter,
                                          bool hasInferrableRHS) const {
   // Most unary operators are never LValues, so don't speculatively resolve
   // them.
-  if (kind != kVarPat && kind != kRefPat)
+  if (kind != kVarPat && kind != kRefPat && kind != kLetPat)
     return this;
 
   // Warn if this is a recursively nested specifier like "var ref x".
@@ -4250,8 +4315,9 @@ UnaryOpNode::emitLValueIfImplicitlyTyped(IREmitter &emitter,
   // only influence the type of implicitly declared variables which cannot be
   // speculatively resolved.  If we did speculatively resolve it, then this is
   // an unneeded marker, e.g. "(var _) = x"
-  auto patKind =
-      kind == kVarPat ? PatternDeclKind::kVar : PatternDeclKind::kRef;
+  auto patKind = kind == kVarPat   ? PatternDeclKind::kVar
+                 : kind == kLetPat ? PatternDeclKind::kBind
+                                   : PatternDeclKind::kRef;
   auto result =
       subExpr->emitLValueIfImplicitlyTyped(emitter, patKind, hasInferrableRHS);
   if (result.isFailure())
@@ -4260,7 +4326,9 @@ UnaryOpNode::emitLValueIfImplicitlyTyped(IREmitter &emitter,
   // If we did resolve it, then we need to emit a warning.
   if (result.getIfValue()) {
     emitter.emitWarning(getLoc())
-        << (kind == kVarPat ? "'var'" : "'ref'")
+        << (kind == kVarPat   ? "'var'"
+            : kind == kLetPat ? "'let'"
+                              : "'ref'")
         << " pattern didn't declare a new variable, it can be removed";
     return result;
   }
@@ -4289,7 +4357,7 @@ AnyValue UnaryOpNode::emitComptime(ExprDest &dest, IREmitter &emitter) const {
 AnyValue UnaryOpNode::emitIR(ExprDest &dest, IREmitter &emitter) const {
   // var/ref patterns are special unary operators that affect their enclosing
   // lvalue.  They are not valid on the right side of an assignment.
-  if (kind == kVarPat || kind == kRefPat) {
+  if (kind == kVarPat || kind == kRefPat || kind == kLetPat) {
     if (dest.getPatternDeclKind() != PatternDeclKind::kNone &&
         dest.getPatternDeclKind() != PatternDeclKind::kBind) {
       emitter.emitWarning(getLoc()) << "nested 'var' or 'ref' patterns are "
@@ -4297,8 +4365,9 @@ AnyValue UnaryOpNode::emitIR(ExprDest &dest, IREmitter &emitter) const {
       return {};
     }
 
-    dest.setPatternDeclKind(kind == kVarPat ? PatternDeclKind::kVar
-                                            : PatternDeclKind::kRef);
+    dest.setPatternDeclKind(kind == kVarPat   ? PatternDeclKind::kVar
+                            : kind == kLetPat ? PatternDeclKind::kBind
+                                              : PatternDeclKind::kRef);
     auto result = emitter.emitExpr(subExpr, dest);
 
     if (result && !result.getIfLValue()) {
@@ -5695,7 +5764,8 @@ auto TupleNode::emitLCVIR(ExprDest &dest, IREmitter &emitter,
   // A binder anywhere in the target rules out an outer 'var' for every fresh
   // name in it, at any nesting depth.
   bool anyEltPatternDecl = llvm::any_of(exprs, [](const ExprNode *elt) {
-    return elt->kind == kVarPat || elt->kind == kRefPat;
+    return elt->kind == kVarPat || elt->kind == kRefPat ||
+           elt->kind == kLetPat;
   });
 
   bool allEltsLValue = true;

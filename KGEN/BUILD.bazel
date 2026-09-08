@@ -1155,6 +1155,7 @@ modular_cc_library(
         "@llvm-project//llvm:Support",  # For llvm/ADT/Triple.h
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:IndexDialect",
+        "@llvm-project//mlir:NVVMToLLVM",
     ],
     # TargetLowering implementations self-register via a static initializer and
     # aren't referenced directly, so the linker would drop them. Force them to
@@ -1201,6 +1202,10 @@ modular_cc_library(
         ":ToolCommon.headers",
         "//AsyncRT:CompilerSupport",
         "//Cache",
+        # The Win32 metadata database behind `winkb_query`, read during
+        # elaboration. Opened lazily, so a build that asks nothing of it never
+        # touches the file.
+        "@sqlite3//:sqlite3",
         "@llvm-project//mlir:IndexDialect",
         "@llvm-project//mlir:NVVMDialect",
         "@llvm-project//mlir:ROCDLDialect",
@@ -1522,6 +1527,14 @@ modular_shared_library(
     ),
     hdrs = glob(["lib/MojoLLDB/**/*.h"]),
     includes = [],
+    linkopts = select({
+        "@platforms//os:windows": [
+            "-Wl,/force:multiple",
+            "-lnormaliz",
+            "-lws2_32",
+        ],
+        "//conditions:default": [],
+    }),
     internal_deps = select({
         # Under --config=hal-device-context we don't link the full DeviceContext,
         # but we need CompilationDevice and the HAL-only CompilerDeviceArch.

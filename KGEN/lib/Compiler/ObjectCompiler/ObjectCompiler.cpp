@@ -74,7 +74,6 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/SplitModule.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
-#include <dlfcn.h>
 #include <fstream>
 #include <string>
 
@@ -511,10 +510,15 @@ static LogicalResult optimizeLLVMModule(llvm::Module &module,
                                         CompilationOptions &options,
                                         AsyncRT::CPUDevice &cpuDevice,
                                         std::optional<size_t> moduleIdx) {
+  // An explicitly selected target ABI can change the TargetMachine's data
+  // layout.  NVPTX's "shortptr" ABI, for example, makes pointers in several
+  // device address spaces 32-bit.  In that case the ABI-specific machine
+  // layout must take precedence over the target attribute's baseline layout;
+  // otherwise LLVM rejects the module when it creates a MachineFunction.
   llvm::DataLayout targetDataLayout =
-      options.targetDataLayout.empty()
-          ? targetMachine.createDataLayout()
-          : llvm::DataLayout(options.targetDataLayout);
+      options.targetABI.empty() && !options.targetDataLayout.empty()
+          ? llvm::DataLayout(options.targetDataLayout)
+          : targetMachine.createDataLayout();
   module.setDataLayout(targetDataLayout);
 
   std::string saveTempsPrefix = options.saveTempsPrefix;
@@ -807,6 +811,20 @@ translateModuleToLLVMIR(llvm::LLVMContext &ctx, ModuleOp module,
       mlir::translateModuleToLLVMIR(module, ctx, moduleName);
   if (!llvmModule)
     return nullptr;
+
+  // MojoLLDB is a DWARF debugger: MojoDWARFParser translates DWARF into
+  // MLIR, and CodeView never reaches it. MLIR's DebugTranslation force-sets
+  // the "CodeView" module flag for MSVC triples "unless set explicitly", so
+  // Mojo debug builds on Windows produced .debug$S/.debug$T our own
+  // debugger cannot read -- and the linker then dropped even those. Be the
+  // explicit setting: flip the flag to 0 and the backend emits
+  // DWARF-in-COFF, which mojo-lldb reads and /debug:dwarf links into the
+  // image. If Visual Studio debugging of Mojo ever matters this becomes an
+  // option; today the only debugger anyone ships for Mojo is ours.
+  if (llvmModule->getTargetTriple().isKnownWindowsMSVCEnvironment())
+    llvmModule->setModuleFlag(
+        llvm::Module::Warning, "CodeView",
+        llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx), 0));
 
   // Attach any necessary instrumentation to the module.
   attachInstrumentationAttributes(*llvmModule, options);
@@ -1336,6 +1354,11 @@ static ErrorOr<BufferRef> createSharedObject(BufferRef buf,
   std::filesystem::path sharedObjPath =
       std::filesystem::temp_directory_path(ec);
   sharedObjPath = sharedObjPath / sharedObjName;
+  // Stable narrow-string storage for the linker argument vector below. That
+  // vector holds StringRefs, which do not own their data, so it cannot borrow
+  // from a temporary; and path::c_str() is const wchar_t* on Windows, which
+  // does not convert to StringRef at all.
+  const std::string sharedObjPathStr = sharedObjPath.string();
 
   auto triple = llvm::Triple(options.targetTriple);
   std::string version = triple.getOSVersion().getAsString();
@@ -1367,7 +1390,7 @@ static ErrorOr<BufferRef> createSharedObject(BufferRef buf,
         args.push_back(options.emissionLinkOptions.c_str());
       args.push_back(objFilePath.c_str());
       args.push_back("-o");
-      args.push_back(sharedObjPath.c_str());
+      args.push_back(sharedObjPathStr);
       return args;
     }
     // Build ELF linker args, plus any backend-specific arguments.
@@ -1378,7 +1401,7 @@ static ErrorOr<BufferRef> createSharedObject(BufferRef buf,
       args.push_back(options.emissionLinkOptions.c_str());
     args.push_back(objFilePath.c_str());
     args.push_back("-o");
-    args.push_back(sharedObjPath.c_str());
+    args.push_back(sharedObjPathStr);
     return args;
   }();
 
@@ -1427,7 +1450,7 @@ static ErrorOr<BufferRef> createSharedObject(BufferRef buf,
   // Save to temp file if needed.
   if (failed(writeBytesToTempWithHash(options.saveTempsPrefix,
                                       std::string(".") +
-                                          sharedObjPath.stem().c_str() + ".so",
+                                          sharedObjPath.stem().string() + ".so",
                                       (*sharedObjBufOr)->getBuffer())))
     return Error("failed to write shared object binary to saveTemps");
 

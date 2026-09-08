@@ -25,15 +25,19 @@ static GlobalTable &getGlobalTable() {
 }
 
 COMPILERRT_EXPORT COMPILERRT_VISIBILITY_EXPORT void *
-KGEN_CompilerRT_GetOrCreateGlobal(llvm::StringRef name, void *(*initFn)(),
+KGEN_CompilerRT_GetOrCreateGlobal(const char *nameData, size_t nameLength,
+                                  void *(*initFn)(),
                                   void (*destroyFn)(void *)) {
   auto &globalTable = getGlobalTable();
-  return globalTable.getOrCreate(name, initFn, destroyFn);
+  return globalTable.getOrCreate(llvm::StringRef(nameData, nameLength), initFn,
+                                 destroyFn);
 }
 
 COMPILERRT_EXPORT COMPILERRT_VISIBILITY_EXPORT void *
-KGEN_CompilerRT_GetGlobalOrNull(llvm::StringRef name) {
-  return KGEN_CompilerRT_GetOrCreateGlobal(name, nullptr, nullptr);
+KGEN_CompilerRT_GetGlobalOrNull(const char *nameData, size_t nameLength) {
+  auto &globalTable = getGlobalTable();
+  return globalTable.getOrCreate(llvm::StringRef(nameData, nameLength), nullptr,
+                                 nullptr);
 }
 
 /// getInsertValue provides thread-local storage for InsertGlobal value passing.
@@ -45,11 +49,13 @@ static void *&getInsertValue() {
 static void *insertGlobalInitFn() { return getInsertValue(); }
 
 COMPILERRT_EXPORT COMPILERRT_VISIBILITY_EXPORT void
-KGEN_CompilerRT_InsertGlobal(llvm::StringRef name, void *value) {
+KGEN_CompilerRT_InsertGlobal(const char *nameData, size_t nameLength,
+                             void *value) {
   auto &globalTable = getGlobalTable();
 
   getInsertValue() = value;
-  globalTable.getOrCreate(name, insertGlobalInitFn, nullptr);
+  globalTable.getOrCreate(llvm::StringRef(nameData, nameLength),
+                          insertGlobalInitFn, nullptr);
 }
 
 //===----------------------------------------------------------------------===//

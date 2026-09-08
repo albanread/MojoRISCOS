@@ -691,12 +691,15 @@ static int linkOutput(OutputType outputType, const State &state,
     }
   }();
   // Validate this is a valid filename using the `path` ctor.
-  defaultOutputName = std::filesystem::path(defaultOutputName).filename();
+  // .string(): filename() yields a path, which converts implicitly to
+  // std::string only where path::value_type is char.
+  defaultOutputName =
+      std::filesystem::path(defaultOutputName).filename().string();
 
   std::error_code ec;
   std::filesystem::path cwd = std::filesystem::current_path(ec);
   if (!ec)
-    defaultOutputName = cwd.append(defaultOutputName);
+    defaultOutputName = cwd.append(defaultOutputName).string();
 
   // Invoke the system linker to link the archive into an executable or produce
   // a dynamic library using the provided output filename argument. The
@@ -756,7 +759,22 @@ static int linkOutput(OutputType outputType, const State &state,
   if (!std::filesystem::exists(compilerRTPath.str(), ec) || ec)
     return state.reportError("unable to locate Mojo CompilerRT library");
 
-  // Invoke the linker command.
+#if defined(_WIN32)
+  // The configuration names the .dll because the JIT path loads that file
+  // directly, but a PE link consumes the import library sitting beside it.
+  // One config key, two consumers; the translation belongs at the link line.
+  std::string compilerRTImportLib;
+  if (compilerRTPath.ends_with_insensitive(".dll")) {
+    compilerRTImportLib = (compilerRTPath.drop_back(4) + ".lib").str();
+    if (std::filesystem::exists(compilerRTImportLib, ec) && !ec)
+      compilerRTPath = compilerRTImportLib;
+  }
+#endif
+
+  // Invoke the linker command. wholeArchiveArg lives at function scope
+  // because the linker argument vector holds StringRefs into it until the
+  // command runs.
+  std::string wholeArchiveArg;
   SmallVector<StringRef> linkerArgs = [&] {
     if (outputType == OutputType::executable)
       return SmallVector<StringRef>{*linker, archivePath, compilerRTPath};
@@ -766,11 +784,22 @@ static int linkOutput(OutputType outputType, const State &state,
     // bindings case, the exported function symbols otherwise wouldn't appeared
     // "used" by the linker, and so it would get aggressively removed.
 
-    SmallVector<StringRef> linkerInvocation{*linker, "-shared"};
+    SmallVector<StringRef> linkerInvocation{*linker};
+#if defined(_WIN32)
+    linkerInvocation.push_back("/DLL");
+#else
+    linkerInvocation.push_back("-shared");
+#endif
 
 #if defined(__APPLE__)
     linkerInvocation.push_back("-Wl,-force_load");
     linkerInvocation.push_back(archivePath);
+#elif defined(_WIN32)
+    // lld-link needs the native COFF spelling.  A compiler driver would accept
+    // the -Wl wrapper, but standalone Windows releases invoke lld-link
+    // directly.
+    wholeArchiveArg = "/WHOLEARCHIVE:" + archivePath;
+    linkerInvocation.push_back(wholeArchiveArg);
 #else
     linkerInvocation.push_back("-Wl,--whole-archive");
     linkerInvocation.push_back(archivePath);
@@ -778,13 +807,36 @@ static int linkOutput(OutputType outputType, const State &state,
 #endif
 
     linkerInvocation.push_back(compilerRTPath);
+#if !defined(_WIN32)
     linkerInvocation.push_back("-o");
     linkerInvocation.push_back(outputName);
+#endif
     return linkerInvocation;
   }();
 
-  // Add other shared libs
+  // Add other shared libs.  The configuration names DLLs because the JIT
+  // loads those files directly.  A PE/COFF link consumes their sibling import
+  // libraries instead, just like CompilerRT above.
+#if defined(_WIN32)
+  SmallVector<StringRef> configuredSharedLibraries;
+  config.appendSharedLibraryLinkArgs(configuredSharedLibraries);
+  SmallVector<std::string> configuredImportLibraries;
+  configuredImportLibraries.reserve(configuredSharedLibraries.size());
+  for (StringRef library : configuredSharedLibraries) {
+    if (library.ends_with_insensitive(".dll")) {
+      std::string importLibrary = (library.drop_back(4) + ".lib").str();
+      if (std::filesystem::exists(importLibrary, ec) && !ec) {
+        configuredImportLibraries.push_back(std::move(importLibrary));
+        continue;
+      }
+    }
+    configuredImportLibraries.push_back(library.str());
+  }
+  for (const std::string &library : configuredImportLibraries)
+    linkerArgs.emplace_back(library);
+#else
   config.appendSharedLibraryLinkArgs(linkerArgs);
+#endif
 
 #ifdef _WIN32
   std::string outputArg = ("/out:" + outputName).str();
@@ -802,8 +854,26 @@ static int linkOutput(OutputType outputType, const State &state,
   linkerArgs.emplace_back("msvcrt.lib");
 #endif
 
-  // Mojo only supports X86_64 COFF right now.
-  linkerArgs.emplace_back("/machine:X64");
+  // The standard library's FFI layer calls POSIX names -- write, dup and
+  // friends -- which the MSVC CRT exports with a leading underscore.
+  // oldnames.lib supplies the un-prefixed aliases. cl.exe requests it through
+  // a /DEFAULTLIB directive in its objects, but Mojo emits its own objects and
+  // invokes the linker directly, so nothing asks for it unless we do.
+  linkerArgs.emplace_back("oldnames.lib");
+
+  // Match the COFF machine type to the target architecture. This was
+  // hardcoded to X64 with the note "Mojo only supports X86_64 COFF right now",
+  // which makes every AOT link on Windows ARM64 fail in the linker rather than
+  // in the compiler. The target triple is already parsed a few lines below for
+  // the libm decision, so the arch is available here.
+  if (llvm::Triple triple(options.targetTriple); triple.isAArch64()) {
+    linkerArgs.emplace_back("/machine:ARM64");
+  } else if (triple.getArch() == llvm::Triple::x86_64) {
+    linkerArgs.emplace_back("/machine:X64");
+  } else {
+    return state.reportError(llvm::formatv(
+        "unsupported COFF target architecture '{0}'", triple.getArchName()));
+  }
 #else
   linkerArgs.emplace_back("-o");
   linkerArgs.emplace_back(outputName);
@@ -823,11 +893,26 @@ static int linkOutput(OutputType outputType, const State &state,
 #endif
 
   // Apply options for stripping unused code.
-#if defined(__APPLE__)
+#if defined(_WIN32)
+  // Debug info survives compilation into the COFF objects as DWARF, and
+  // then lld-link silently drops it: without /debug the image gets no debug
+  // sections at all, so `--debug-level full` produced binaries LLDB could
+  // not set one breakpoint in -- pending forever, which reads as a debugger
+  // defect rather than a link line missing one flag. /debug:dwarf keeps the
+  // DWARF in the image (Windows has no dsymutil; the executable IS the
+  // debug artifact), and /OPT:NOREF stops reference stripping from deleting
+  // the code a breakpoint would land on.
+  if (options.debugLevel != CompilationOptions::kNoDebug) {
+    linkerArgs.emplace_back("/debug:dwarf");
+    linkerArgs.emplace_back("/OPT:NOREF");
+  } else {
+    linkerArgs.emplace_back("/OPT:REF");
+  }
+#elif defined(__APPLE__)
   linkerArgs.emplace_back("-Wl,-dead_strip");
 #else
   linkerArgs.emplace_back("-Wl,--gc-sections");
-#endif // defined(__APPLE__)
+#endif
 
   // The Mojo standard library calls libm entry points such as `hypot` and
   // `expm1`. A C compiler driver doesn't link libm implicitly the way a C++
@@ -843,8 +928,13 @@ static int linkOutput(OutputType outputType, const State &state,
   // Propagate any user-supplied linker flags. Add these last so they take
   // precedence.
   for (const auto &extraArg : extraLinkerArgs) {
+#if defined(_WIN32)
+    // The Windows linker is invoked directly, not through a compiler driver.
+    linkerArgs.emplace_back(extraArg.c_str());
+#else
     linkerArgs.emplace_back("-Xlinker");
     linkerArgs.emplace_back(extraArg.c_str());
+#endif
   }
 
   // Print linker arguments for debugging

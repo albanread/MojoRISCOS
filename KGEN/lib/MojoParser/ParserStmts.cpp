@@ -117,6 +117,7 @@ static bool isStatementThatMightHaveDecorators(Token::Kind tokenKind) {
   case Token::kw_import:
   case Token::kw_pass:
   case Token::kw_var:
+  case Token::kw_let:
   case Token::kw_alias:
   case Token::kw_comptime:
   case Token::kw___mlir_region:
@@ -805,6 +806,15 @@ ParseResult StmtParser::parseStmt(bool onlySimpleStmt, bool &parsedCompound,
     if (isa_and_nonnull<FnOp>(getParentDecl().getIfOperation()))
       break;
     return parseVarStmt(startCursor, stmtIndent);
+  case Token::kw_let:
+    // win-mojo: `let` is a function-body BINDING (immutable, scope-bound); it
+    // deliberately has no field or file-scope form, matching the Mac ports.
+    // See language_update.md.
+    if (isa_and_nonnull<FnOp>(getParentDecl().getIfOperation()))
+      break;
+    return emitError(getToken().getLoc(),
+                     "'let' declares an immutable binding inside a function "
+                     "body; use 'var' for a field or module value");
   case Token::kw_alias: {
     // Decorators on aliases are not allowed inside function bodies.
     if (isa_and_nonnull<FnOp>(getParentDecl().getIfOperation()))
@@ -852,7 +862,7 @@ ParseResult StmtParser::parseStmt(bool onlySimpleStmt, bool &parsedCompound,
   // Parse a single expression, an assignment stmt, or augmented assignment
   // statement.
   ExprNode *expr = nullptr;
-  bool isVarStatement = getToken().is(Token::kw_var);
+  bool isVarStatement = getToken().isAny(Token::kw_var, Token::kw_let);
   rejectDecorator(/*inFunctionBody=*/isVarStatement,
                   /*printToken=*/isVarStatement);
   if (parseSimpleStmtExprs(expr, stmtIndent))
@@ -4066,13 +4076,269 @@ ParseResult StmtParser::parseExtensionStmt(LexerCursor startCursor,
 
 ParseResult StmtParser::parseClassStmt(LexerCursor startCursor,
                                        size_t curIndent) {
-  emitTokenError("classes are not supported yet");
-  consumeToken(Token::kw_class).getLoc();
+  // `class Name(IFace):` is the first-class Windows COM object surface. It is
+  // a source-level desugar (language_update.md): the compiler generates the
+  // struct-of-state plus the ComClassBuilder factory that the library form
+  // spells by hand, and the user writes only the clean declaration. The
+  // generated text is sub-parsed into this module, so every downstream stage
+  // -- type checking, the metadata slot lookups, the trampolines -- sees an
+  // ordinary struct and never learns `class` existed.
+  auto recover = [&]() -> ParseResult {
+    // skipUntilIndentation stops on the CURRENT token when it already sits
+    // at this indentation, so recovery has to make progress itself or the
+    // statement loop re-enters this function on the same token forever. A
+    // nested class reached exactly that: millions of identical diagnostics
+    // and no termination.
+    if (getToken().isNot(Token::eof))
+      if (auto indent = getToken().getIndentation())
+        if (*indent <= curIndent)
+          consumeToken();
+    skipUntilIndentation(curIndent);
+    return success();
+  };
 
-  // Skip the body of this definition: go to a token the starts a line at the
-  // same indent level (or less) as the current definition.
+  // Consume the keyword before any diagnostic below can recover, so recovery
+  // always starts from a token that has been passed.
+  SMLoc kwLoc = consumeToken(Token::kw_class).getLoc();
+
+  // Top level only, like a struct.
+  if (isa_and_nonnull<StructDeclOp, TraitDeclOp, FnOp>(
+          getParentDecl().getIfOperation())) {
+    emitError(kwLoc, "a COM class must be declared at module scope");
+    return recover();
+  }
+
+  StringAttr nameAttr;
+  SMLoc nameLoc;
+  if (parseIdentifier(nameAttr, "expected class name", &nameLoc,
+                      /*forbidStartOfLine=*/true))
+    return recover();
+  StringRef className = nameAttr.getValue();
+
+  // `class Name(IFace, ...)`. The parenthesised list names the COM interfaces
+  // the class implements. v1 supports exactly one; several needs tear-off
+  // vtables (COCOA_DESIGN.md's cost model), which the runtime does not yet do.
+  SmallVector<StringRef> ifaces;
+  if (getToken().is(Token::l_paren)) {
+    consumeToken(Token::l_paren);
+    while (getToken().isNot(Token::r_paren) && getToken().isNot(Token::eof) &&
+           getToken().isNot(Token::colon)) {
+      StringAttr part;
+      if (parseIdentifier(part, "expected COM interface name"))
+        return recover();
+      ifaces.push_back(part.getValue());
+      if (!consumeIf(Token::comma))
+        break;
+    }
+    if (parseToken(Token::r_paren, "expected ')' after the interface list"))
+      return recover();
+  }
+  if (ifaces.empty()) {
+    emitError(nameLoc,
+              "a COM class names the interface it implements: "
+              "`class " +
+                  className.str() + "(ISomeInterface):`");
+    return recover();
+  }
+
+  if (parseToken(Token::colon, "expected ':' after the class header"))
+    return recover();
+
+  // An empty body would swallow the rest of the file: the capture below
+  // starts at the line of whatever token follows, which for a bodiless class
+  // is the next top-level statement. Diagnosed here, where the cause is
+  // still visible, rather than as a parse error inside generated source.
+  if (auto bodyIndent = getToken().getIndentation()) {
+    if (*bodyIndent <= curIndent) {
+      emitError(nameLoc,
+                "a COM class needs a body: declare its state with `var` and "
+                "implement the interface's methods");
+      return success();
+    }
+  } else if (getToken().is(Token::eof)) {
+    // `class X(IFoo):` as the last line of the file: the token that follows
+    // carries no indentation record, so the guard above cannot see it.
+    emitError(nameLoc,
+              "a COM class needs a body: declare its state with `var` and "
+              "implement the interface's methods");
+    return success();
+  } else {
+    // The only other token without an indentation record is one sharing the
+    // header's line: `class X(IFoo): var y = 1`. The capture below walks back
+    // to the start of the token's line, which would swallow the header into
+    // the body -- and the sub-parse would then meet a nested class where the
+    // state should be, reported against a line that reads perfectly fine.
+    // recover(), not a bare return: the rest of the header line is not a
+    // statement anyone meant to write, and leaving it for the statement loop
+    // would report it a second time beneath the real diagnosis.
+    unsigned headerBufId = getSourceMgr().FindBufferContainingLoc(kwLoc);
+    if (headerBufId &&
+        getSourceMgr().getLineAndColumn(getToken().getLoc(), headerBufId)
+                .first ==
+            getSourceMgr().getLineAndColumn(kwLoc, headerBufId).first) {
+      emitError(nameLoc,
+                "a COM class body starts on the line below the header");
+      return recover();
+    }
+  }
+
+  // Capture the body's source. getToken() now sits on the first body token;
+  // walk back to the start of its line so the captured text keeps the user's
+  // indentation, which becomes the struct members' indentation verbatim.
+  StringRef buffer = getLexer().getBuffer();
+  const char *firstTok = getToken().getLoc().getPointer();
+  const char *lineStart = firstTok;
+  while (lineStart > buffer.begin() && lineStart[-1] != '\n')
+    --lineStart;
+
+  // The run of leading whitespace on the first body line is the base indent;
+  // the generated factory matches it so the struct body stays consistent.
+  StringRef baseIndent(lineStart, firstTok - lineStart);
+
+  // Consume the block, then take everything up to the next statement as body.
   skipUntilIndentation(curIndent);
-  return success();
+  const char *bodyEnd = getToken().is(Token::eof)
+                            ? buffer.end()
+                            : getToken().getLoc().getPointer();
+  // Own the body text: a Lexer reads to a guaranteed null terminator, which a
+  // bare StringRef into the middle of the file does not have -- lexing it
+  // directly would run off the end into the rest of the buffer. std::string's
+  // storage is null-terminated at size(), so a Lexer over it stops cleanly.
+  std::string bodyOwned(lineStart, bodyEnd);
+  StringRef bodyText(bodyOwned);
+
+  // Where the body sits in the user's own file. The generated buffer is
+  // padded below so the body lands on these same line numbers, which is what
+  // lets a diagnostic inside it name the file a person actually wrote.
+  unsigned userBufId =
+      getSourceMgr().FindBufferContainingLoc(SMLoc::getFromPointer(lineStart));
+  unsigned bodyLine = 0;
+  StringRef userFile;
+  if (userBufId) {
+    bodyLine = getSourceMgr()
+                   .getLineAndColumn(SMLoc::getFromPointer(lineStart),
+                                     userBufId)
+                   .first;
+    userFile = getSourceMgr().getMemoryBuffer(userBufId)->getBufferIdentifier();
+  }
+
+  // Scan the body for method names: any `def` at the base indent. A COM slot
+  // is filled per method, and the metadata gives the slot -- so only names are
+  // needed here, not arities (ComClassBuilder.method picks the trampoline).
+  // The base indent, not merely any `def`: a def deeper in the body belongs
+  // to something the sub-parse will refuse anyway (Mojo has no local defs and
+  // nested types are module-scope), and wiring it here would bury that
+  // refusal under an unresolved ClassName.name in the factory.
+  SmallVector<StringRef> methods;
+  {
+    auto atBaseIndent = [&](const Token &tok) {
+      auto indent = tok.getIndentation();
+      return indent && *indent == baseIndent.size();
+    };
+    Lexer scan(shared.diags, bodyText, bodyText.begin());
+    while (scan.getToken().isNot(Token::eof)) {
+      if (scan.getToken().is(Token::kw_def) &&
+          atBaseIndent(scan.getToken())) {
+        scan.lexToken();
+        if (scan.getToken().is(Token::identifier))
+          methods.push_back(scan.getToken().getSpelling());
+      }
+      scan.lexToken();
+    }
+  }
+
+  // Generate the desugared source: aliased imports so nothing collides with
+  // the user's, the struct with the body verbatim, and the into_com() factory.
+  SmallString<1024> src;
+  llvm::raw_svector_ostream os(src);
+  std::string alias = ("__wincom_" + className).str();
+  std::string ualias = ("__winunk_" + className).str();
+  // The imports go at the END of this buffer, not the front, and the reason
+  // is line numbers. Every line above the body is a line the padding below
+  // has to make up for, and a class declared near the top of its file cannot
+  // be aligned if the preamble is four lines tall -- which is most classes,
+  // since a file usually opens with one. Module-level names are resolved
+  // after the whole buffer is parsed, so where the imports sit matters to
+  // nothing except how far down the body starts.
+  os << "@fieldwise_init\n";
+  // Movable, not Copyable: into_com consumes `self^` and finish_state needs
+  // only Movable & Deinitable, while deriving Copyable would refuse any class
+  // holding a move-only field -- an owned ComPtr being the obvious one.
+  os << "struct " << className << "(Movable):\n";
+  // Everything before this point is preamble; the body follows verbatim.
+  size_t bodyOffset = src.size();
+  os << bodyText;
+  if (!bodyText.ends_with("\n"))
+    os << "\n";
+  os << baseIndent << "def into_com(var self) raises -> " << ualias
+     << ".ComPtr[StaticString(\"" << ifaces.front() << "\")]:\n";
+  os << baseIndent << baseIndent << "var __b = " << alias
+     << ".ComClassBuilder[";
+  for (auto [n, i] : llvm::enumerate(ifaces))
+    os << (n ? ", " : "") << "StaticString(\"" << i << "\")";
+  os << "]()\n";
+  // wire_if_com, not method: a class body may hold helpers that are not COM
+  // methods at all, and those stay ordinary methods of the struct. A name
+  // that no implemented interface declares is left unwired, and finish()
+  // refuses to build an object with an unfilled slot -- so a mistyped COM
+  // name is caught at construction rather than compilation.
+  for (StringRef m : methods)
+    os << baseIndent << baseIndent << "__b.wire_if_com[\"" << m << "\", "
+       << className << "." << m << "]()\n";
+  os << baseIndent << baseIndent << "return __b^.finish_state(self^)\n";
+  // And the imports, below everything, for the reason given above.
+  os << "import std.sys.com as " << alias << "\n";
+  os << "import std.sys._com as " << ualias << "\n";
+
+  // Own the text in the source manager and sub-parse it into this module. The
+  // struct's own body defers and re-parses from this buffer, so it must
+  // outlive compilation; the SourceMgr owns it.
+  // Set MOJO_DEBUG_COM_CLASS to dump the generated source: the desugar
+  // is meant to be inspectable, not magic.
+  if (::getenv("MOJO_DEBUG_COM_CLASS")) {
+    llvm::errs() << "==== class " << className << " desugars to ====\n";
+    llvm::errs().write(os.str().data(), os.str().size());
+    llvm::errs() << "==== end ====\n";
+  }
+  // Put the body on the line numbers it has in the user's file.
+  //
+  // A diagnostic inside a class body used to read `<class Target>:14:20` --
+  // a line in a buffer the user has never seen, in a file that does not
+  // exist. The body is copied verbatim, indentation and all, so if the
+  // generated preamble is padded out to the same height as everything above
+  // the body in the original, then every line and every column inside the
+  // body agrees with the original exactly. Name the buffer after that file
+  // and the diagnostic is indistinguishable from a real one, because it is
+  // one: same file, same line, same column, same text.
+  //
+  // The generated factory that follows the body then occupies the lines just
+  // after the class -- which is where a person looks for a problem with the
+  // class anyway. Its errors are notes on a primary diagnostic that already
+  // points at the user's `into_com()` call, so nothing that was right becomes
+  // wrong.
+  //
+  // Padding is only possible when the body is further down its file than the
+  // preamble is tall. A class declared in the first few lines of a file
+  // cannot be aligned; that keeps the old buffer name, now with the origin
+  // in it so a person can at least find the class.
+  unsigned preambleLines = llvm::count(StringRef(src).take_front(bodyOffset),
+                                       '\n');
+  std::string bufName;
+  if (bodyLine > preambleLines && !userFile.empty()) {
+    src.insert(src.begin(), bodyLine - 1 - preambleLines, '\n');
+    bufName = userFile.str();
+  } else {
+    bufName = ("<class " + className + " at " + userFile + ":" +
+               llvm::Twine(bodyLine) + ">")
+                  .str();
+  }
+
+  auto memBuf = llvm::MemoryBuffer::getMemBufferCopy(os.str(), bufName);
+  unsigned bufId =
+      getSourceMgr().AddNewSourceBuffer(std::move(memBuf), SMLoc());
+  StringRef synth = getSourceMgr().getMemoryBuffer(bufId)->getBuffer();
+  Lexer subLexer(shared.diags, synth, synth.begin());
+  return ParserBase(shared, subLexer).parseSuite(getDeclScope());
 }
 
 /// An MLIR region declaration defines a single block region body as a suite

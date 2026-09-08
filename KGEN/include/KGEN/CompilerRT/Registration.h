@@ -16,6 +16,7 @@
 
 #include "Support/LLVMForwardDecls.h"
 #include "Support/SymbolExport.h"
+#include "llvm/ADT/StringRef.h"
 
 //===----------------------------------------------------------------------===//
 // Initialize.cpp
@@ -29,7 +30,16 @@ COMPILERRT_EXPORT LLVM_ATTRIBUTE_USED bool KGEN_CompilerRT_Initialize();
 
 /// Allow parts of the execution engine to inject globals.
 COMPILERRT_EXPORT COMPILERRT_VISIBILITY_EXPORT void
-KGEN_CompilerRT_InsertGlobal(llvm::StringRef name, void *value);
+KGEN_CompilerRT_InsertGlobal(const char *nameData, size_t nameLength,
+                             void *value);
+
+/// C++ convenience overload for callers inside KGEN. The exported runtime ABI
+/// deliberately uses pointer-plus-length instead of passing StringRef by value:
+/// Microsoft x64 passes a 16-byte aggregate indirectly, while Mojo's C ABI
+/// expands a string slice into two scalar arguments.
+inline void KGEN_CompilerRT_InsertGlobal(llvm::StringRef name, void *value) {
+  KGEN_CompilerRT_InsertGlobal(name.data(), name.size(), value);
+}
 
 //===----------------------------------------------------------------------===//
 // Python.cpp

@@ -157,7 +157,19 @@ struct CompilationTarget[value: _TargetType = _current_target()](
 
         comptime if is_triple["nvptx64-nvidia-cuda", Self.value]():
             # TODO: use `is_nvidia_gpu` when moved to into this struct.
-            return "nvptx-short-ptr=true"
+            comptime if (
+                Self._is_arch["sm_120"]()
+                or Self._is_arch["sm_120a"]()
+                or Self._is_arch["sm_121"]()
+                or Self._is_arch["sm_121a"]()
+            ):
+                # Grid-constant tensor-map parameters need a 64-bit generic
+                # address on Blackwell consumer GPUs. LLVM's shortptr ABI
+                # makes entry-parameter pointers 32-bit, truncating the TMA
+                # descriptor address before cp.async.bulk.tensor uses it.
+                return "nvptx-short-ptr=false"
+            else:
+                return "nvptx-short-ptr=true"
         else:
             return ""
 
@@ -364,6 +376,15 @@ struct CompilationTarget[value: _TargetType = _current_target()](
         """
         return Self._os() in ["darwin", "macosx"]
 
+    @staticmethod
+    def is_windows() -> Bool:
+        """Returns True if the host operating system is Windows.
+
+        Returns:
+            True if the host operating system is Windows and False otherwise.
+        """
+        return Self._os() == "windows"
+
 
 def platform_map[
     T: Copyable,
@@ -372,6 +393,7 @@ def platform_map[
     *,
     linux: Optional[T] = None,
     macos: Optional[T] = None,
+    windows: Optional[T] = None,
 ]() -> T:
     """Helper for defining a compile time value depending
     on the current compilation target, raising a compilation
@@ -382,6 +404,7 @@ def platform_map[
         operation: Optional operation name for error messages.
         linux: The value to use on Linux platforms.
         macos: The value to use on macOS platforms.
+        windows: The value to use on Windows platforms.
 
     Returns:
         The platform-specific value for the current target.
@@ -399,6 +422,8 @@ def platform_map[
         return materialize[macos.value()]()
     elif CompilationTarget.is_linux() and linux:
         return materialize[linux.value()]()
+    elif CompilationTarget.is_windows() and windows:
+        return materialize[windows.value()]()
     else:
         CompilationTarget.unsupported_target_error[operation=operation]()
 
@@ -1046,13 +1071,27 @@ def is_amd_gpu[subarch: StaticString]() -> Bool:
 
 
 @always_inline("nodebug")
+def is_spirv_gpu() -> Bool:
+    """Returns True if compiling for a SPIR-V GPU target -- the Adreno offload
+    line, where kernels are emitted as SPIR-V and lowered by the vendor driver
+    -- and False otherwise.
+
+    Returns:
+        True if the target triple is `spirv64-unknown-unknown`.
+    """
+    return is_triple["spirv64-unknown-unknown"]()
+
+
+@always_inline("nodebug")
 def is_gpu() -> Bool:
     """Returns True if the target triple is GPU and False otherwise.
 
     Returns:
         True if the triple target is GPU and False otherwise.
     """
-    return is_nvidia_gpu() or is_amd_gpu() or is_apple_gpu()
+    return (
+        is_nvidia_gpu() or is_amd_gpu() or is_apple_gpu() or is_spirv_gpu()
+    )
 
 
 @always_inline("nodebug")

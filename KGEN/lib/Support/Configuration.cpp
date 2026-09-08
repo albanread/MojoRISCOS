@@ -89,19 +89,28 @@ SmallVector<std::string> MojoConfig::getPluginPaths() {
 // LLDB Configurations
 //===----------------------------------------------------------------------===//
 
-#ifdef __APPLE__
+#ifdef _WIN32
+#define EXT ".dll"
+#define LIB_PREFIX ""
+#define EXE_EXT ".exe"
+#elif defined(__APPLE__)
 #define EXT ".dylib"
+#define LIB_PREFIX "lib"
+#define EXE_EXT ""
 #else
 #define EXT ".so"
+#define LIB_PREFIX "lib"
+#define EXE_EXT ""
 #endif
 
 StringRef MojoConfig::getLLDBPluginPath() {
   return getPath(STRINGIFY_MOJO_CONFIG(".lldb_plugin_path"),
-                 "lib/libMojoLLDB" EXT);
+                 "lib/" LIB_PREFIX "MojoLLDB" EXT);
 }
 
 StringRef MojoConfig::getLLDBPath() {
-  return getPath(STRINGIFY_MOJO_CONFIG(".lldb_path"), "bin/mojo-lldb");
+  return getPath(STRINGIFY_MOJO_CONFIG(".lldb_path"),
+                 "bin/mojo-lldb" EXE_EXT);
 }
 
 //===----------------------------------------------------------------------===//
@@ -110,11 +119,18 @@ StringRef MojoConfig::getLLDBPath() {
 
 StringRef MojoConfig::getCompilerRTPath() {
   return getPath(STRINGIFY_MOJO_CONFIG(".compilerrt_path"),
-                 "lib/libKGENCompilerRTShared" EXT);
+                 "lib/" LIB_PREFIX "KGENCompilerRTShared" EXT);
+}
+
+StringRef MojoConfig::getWinKBPath() {
+  // Overridable as MODULAR_MOJO_MAX_WINKB_PATH, and defaulting inside the
+  // package so a normal install needs no configuration.
+  return getPath(STRINGIFY_MOJO_CONFIG(".winkb_path"), "lib/windows_api.db");
 }
 
 StringRef MojoConfig::getMGPRTPath() {
-  return getPath(STRINGIFY_MOJO_CONFIG(".mgprt_path"), "lib/libMGPRT" EXT);
+  return getPath(STRINGIFY_MOJO_CONFIG(".mgprt_path"),
+                 "lib/" LIB_PREFIX "MGPRT" EXT);
 }
 
 //===----------------------------------------------------------------------===//
@@ -122,26 +138,27 @@ StringRef MojoConfig::getMGPRTPath() {
 //===----------------------------------------------------------------------===//
 
 StringRef MojoConfig::getDriverPath() {
-  return getPath(STRINGIFY_MOJO_CONFIG(".driver_path"), "bin/mojo");
+  return getPath(STRINGIFY_MOJO_CONFIG(".driver_path"), "bin/mojo" EXE_EXT);
 }
 
 StringRef MojoConfig::getJupyterPath() {
   return getPath(STRINGIFY_MOJO_CONFIG(".jupyter_path"),
-                 "lib/libMojoJupyter" EXT);
+                 "lib/" LIB_PREFIX "MojoJupyter" EXT);
 }
 
 StringRef MojoConfig::getLSPServerPath() {
   return getPath(STRINGIFY_MOJO_CONFIG(".lsp_server_path"),
-                 "bin/mojo-lsp-server");
+                 "bin/mojo-lsp-server" EXE_EXT);
 }
 
 StringRef MojoConfig::getMBlackPath() {
-  return getPath(STRINGIFY_MOJO_CONFIG(".mblack_path"), "bin/mblack");
+  return getPath(STRINGIFY_MOJO_CONFIG(".mblack_path"),
+                 "bin/mblack" EXE_EXT);
 }
 
 StringRef MojoConfig::getREPLEntryPoint() {
   return getPath(STRINGIFY_MOJO_CONFIG(".repl_entry_point"),
-                 "lib/mojo-repl-entry-point");
+                 "lib/mojo-repl-entry-point" EXE_EXT);
 }
 
 StringRef MojoConfig::getLinkerDriver() {
@@ -149,7 +166,7 @@ StringRef MojoConfig::getLinkerDriver() {
 }
 
 StringRef MojoConfig::getLLDPath() {
-  return getPath(STRINGIFY_MOJO_CONFIG(".lld_path"), "bin/lld");
+  return getPath(STRINGIFY_MOJO_CONFIG(".lld_path"), "bin/lld" EXE_EXT);
 }
 
 void MojoConfig::setLLDPathOverride(StringRef path) {

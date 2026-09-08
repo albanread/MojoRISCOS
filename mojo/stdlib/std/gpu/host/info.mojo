@@ -195,6 +195,26 @@ comptime AppleMetalFamily = AcceleratorArchitectureFamily(
 )
 """Apple Metal GPU architecture family."""
 
+comptime QualcommAdrenoFamily = AcceleratorArchitectureFamily(
+    warp_size=64,
+    threads_per_multiprocessor=64 * 16,
+    shared_memory_per_multiprocessor=32 * _KB,
+    max_registers_per_block=64 * _K,
+    max_thread_block_size=_K,
+)
+"""Qualcomm Adreno GPU architecture family (Snapdragon X and later).
+
+`warp_size` is nominal. Measured on an Adreno X1-45, Vulkan reports
+`subgroupSize = 64`, but OpenCL's `CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE`
+comes back **per kernel** as 64 or 128 on the same device - it is not a device
+constant the way NVIDIA's 32 and AMD CDNA's 64 are. Kernels that depend on the
+real width must query it after compilation rather than trust this value.
+
+`shared_memory_per_multiprocessor` of 32 KiB is measured and is the binding
+constraint: under half of AMD's 64 KiB and a seventh of Hopper's 228 KiB, so
+tile sizes lifted from either vendor's kernels will not fit.
+"""
+
 # ===-----------------------------------------------------------------------===#
 # AcceleratorArchitectureFamily
 # ===-----------------------------------------------------------------------===#
@@ -265,6 +285,34 @@ comptime NoGPU = GPUInfo(
 # ===-----------------------------------------------------------------------===#
 # Apple Silicon
 # ===-----------------------------------------------------------------------===#
+def _get_adreno_x1_target() -> _TargetType:
+    """Creates an MLIR target configuration for the Qualcomm Adreno X1 GPU.
+
+    Adreno has no LLVM backend and Qualcomm does not publish the shader ISA, so
+    the route is SPIR-V: LLVM emits it, and Qualcomm's own driver compiler
+    lowers it to Adreno machine code. This mirrors how Metal is handled, where
+    LLVM bitcode is handed to Apple's compiler rather than a backend being
+    written - see `LLVMIRDowngradePass.cpp`.
+
+    The `data_layout` below is not hand-written. It is exactly what
+    `clang -target spirv64-unknown-unknown -S -emit-llvm` emits, per the
+    "query LLVM/Clang" method in `docs/adding-gpu-targets.md`.
+
+    Returns:
+        MLIR target configuration for Adreno X1.
+    """
+    return __mlir_attr[
+        `#kgen.target<triple = "spirv64-unknown-unknown", `,
+        `stdlib_plugin = "adreno", `,
+        `arch = "adreno-x1", `,
+        `features = "", `,
+        `data_layout = "e-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-n8:16:32:64-G1", `,
+        `index_bit_width = 64,`,
+        `simd_bit_width = 128`,
+        `> : !kgen.target`,
+    ]
+
+
 def _get_metal_m1_target() -> _TargetType:
     """Creates an MLIR target configuration for M1 Metal GPU.
 
@@ -434,6 +482,23 @@ def _get_metal_m5_metal4_target() -> _TargetType:
         `> : !kgen.target`,
     ]
 
+
+comptime AdrenoX1 = GPUInfo.from_family(
+    family=QualcommAdrenoFamily,
+    name="Qualcomm Adreno X1",
+    api="adreno",
+    arch_name="adreno-x1",
+    compute=1.0,
+    version="adreno-x1",
+    sm_count=3,
+)
+"""Qualcomm Adreno X1 (Snapdragon X).
+
+`sm_count` of 3 is what the OpenCL driver reports as
+`CL_DEVICE_MAX_COMPUTE_UNITS` on an X1-45. Note the same driver reports
+`CL_DEVICE_MAX_CLOCK_FREQUENCY` as 1 MHz, which is nonsense, so treat its
+numbers with suspicion generally.
+"""
 
 comptime MetalM1 = GPUInfo.from_family(
     family=AppleMetalFamily,
@@ -711,7 +776,7 @@ def _get_dgx_spark_target() -> _TargetType:
         `arch = "sm_121a", `,
         `features = "+ptx88,+sm_121a", `,
         `tune_cpu = "sm_121a", `,
-        `data_layout = "e-p3:32:32-p4:32:32-p5:32:32-p6:32:32-p7:32:32-p101:32:32-i64:64-i128:128-i256:256-v16:16-v32:32-n16:32:64",`,
+        `data_layout = "e-p6:32:32-i64:64-i128:128-i256:256-v16:16-v32:32-n16:32:64",`,
         `index_bit_width = 64,`,
         `simd_bit_width = 128`,
         `> : !kgen.target`,
@@ -1008,7 +1073,7 @@ def _get_rtx5090_target() -> _TargetType:
         `arch = "sm_120a", `,
         `features = "+ptx87,+sm_120a", `,
         `tune_cpu = "sm_120a", `,
-        `data_layout = "e-p3:32:32-p4:32:32-p5:32:32-p6:32:32-p7:32:32-p101:32:32-i64:64-i128:128-i256:256-v16:16-v32:32-n16:32:64",`,
+        `data_layout = "e-p6:32:32-i64:64-i128:128-i256:256-v16:16-v32:32-n16:32:64",`,
         `index_bit_width = 64,`,
         `simd_bit_width = 128`,
         `> : !kgen.target`,
@@ -1222,7 +1287,15 @@ def _get_rtx2060_target() -> _TargetType:
         `#kgen.target<triple = "nvptx64-nvidia-cuda", `,
         `stdlib_plugin = "cuda", `,
         `arch = "sm_75", `,
-        `features = "+ptx63,+sm_75", `,
+        # +ptx63 (the upstream value) declares PTX ISA 6.3, which predates
+        # instructions the current math library emits for this target --
+        # `tanh.approx.f32` needs 7.0. The module was rejected by both ptxas
+        # and the driver's JIT (CUDA error 218), so any kernel calling tanh
+        # was unloadable on Turing. The hardware implements the instruction;
+        # only the declared version was wrong. Raised to match every
+        # non-legacy entry in this file. See albanread/oracles
+        # findings/declared-isa-version.md.
+        `features = "+ptx81,+sm_75", `,
         `tune_cpu = "sm_75", `,
         `data_layout = "e-p3:32:32-p4:32:32-p5:32:32-p6:32:32-p7:32:32-p101:32:32-i64:64-i128:128-i256:256-v16:16-v32:32-n16:32:64",`,
         `index_bit_width = 64,`,
@@ -1774,6 +1847,8 @@ struct GPUInfo(Copyable, Equatable, Movable, RegisterPassable, Writable):
         Returns:
             MLIR target configuration for the GPU.
         """
+        if self.name == "Qualcomm Adreno X1":
+            return _get_adreno_x1_target()
         if self.name == "NVIDIA Tesla P100":
             return _get_teslap100_target()
         if self.name == "NVIDIA GeForce GTX 1060":
@@ -2089,6 +2164,7 @@ comptime _all_targets = (
     StaticString("gfx1152"),
     StaticString("gfx1200"),
     StaticString("gfx1201"),
+    StaticString("adreno-x1"),
     StaticString("apple-m1"),
     StaticString("apple-m1-metal4"),
     StaticString("apple-m2"),
@@ -2213,6 +2289,8 @@ def _get_info_from_target[target_arch0: StaticString]() -> GPUInfo:
         return materialize[Radeon9060]()
     elif target_arch == "gfx1201":
         return materialize[Radeon9070]()
+    elif target_arch == "adreno-x1":
+        return materialize[AdrenoX1]()
     elif target_arch == "apple-m1":
         return materialize[MetalM1]()
     elif target_arch == "apple-m1-metal4":

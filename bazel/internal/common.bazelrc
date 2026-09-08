@@ -35,6 +35,13 @@ common --incompatible_disallow_empty_glob
 common --platforms=@mojo_host_platform
 common --host_platform=@mojo_host_platform
 
+# Explicit Windows GPU targets. The default above auto-detects the installed
+# card, so these are only needed to build for a card this machine does not
+# have -- each box compiling for the other's GPU.
+build:windows-nvidia-blackwell --platforms=//:windows_x86_64_nvidia_blackwell
+build:windows-nvidia-t1000 --platforms=//:windows_x86_64_nvidia_t1000
+build:windows-nvidia-rtx3060 --platforms=//:windows_x86_64_nvidia_rtx3060
+
 # TODO: remove when https://github.com/bazelbuild/bazel/issues/25145 is fixed
 info --platforms=@platforms//host
 
@@ -175,9 +182,19 @@ build --experimental_propagate_custom_flag=@llvm-project//mlir:enable_cuda
 build --host_per_file_copt=external/.*nixl_upstream.*@-fexceptions,-frtti,-fvisibility=default,-Wno-unused-private-field,-Wno-unused-parameter,-Wno-unused-variable,-Wno-unused-but-set-variable,-Wno-unused-function,-Wno-missing-field-initializers,-Wno-shadow,-Wno-deprecated-declarations,-Wno-sign-compare,-Wno-ctad-maybe-unsupported,-Wno-suggest-override,-Wno-global-constructors,-Wno-format-nonliteral,-Wno-exit-time-destructors,-Wno-non-virtual-dtor,-Wno-cast-qual,-Wno-implicit-fallthrough,-Wno-zero-as-null-pointer-constant,-Wno-old-style-cast,-Wno-extra-semi,-Wno-double-promotion,-Wno-shorten-64-to-32,-Wno-conversion,-Wno-thread-safety-analysis,-Wno-thread-safety,-Wno-thread-safety-reference,-Wno-thread-safety-attributes,-Wno-tautological-constant-out-of-range-compare,-Wno-tautological-compare,-Wno-sign-conversion,-Wno-implicit-int-conversion,-Wno-implicit-float-conversion,-Wno-cast-align,-Wno-pessimizing-move,-Wno-self-assign-overloaded,-Wno-self-move,-Wno-non-virtual-dtor
 build --per_file_copt=external/.*nixl_upstream.*@-fexceptions,-frtti,-fvisibility=default,-Wno-unused-private-field,-Wno-unused-parameter,-Wno-unused-variable,-Wno-unused-but-set-variable,-Wno-unused-function,-Wno-missing-field-initializers,-Wno-shadow,-Wno-deprecated-declarations,-Wno-sign-compare,-Wno-ctad-maybe-unsupported,-Wno-suggest-override,-Wno-global-constructors,-Wno-format-nonliteral,-Wno-exit-time-destructors,-Wno-non-virtual-dtor,-Wno-cast-qual,-Wno-implicit-fallthrough,-Wno-zero-as-null-pointer-constant,-Wno-old-style-cast,-Wno-extra-semi,-Wno-double-promotion,-Wno-shorten-64-to-32,-Wno-conversion,-Wno-thread-safety-analysis,-Wno-thread-safety,-Wno-thread-safety-reference,-Wno-thread-safety-attributes,-Wno-tautological-constant-out-of-range-compare,-Wno-tautological-compare,-Wno-sign-conversion,-Wno-implicit-int-conversion,-Wno-implicit-float-conversion,-Wno-cast-align,-Wno-pessimizing-move,-Wno-self-assign-overloaded,-Wno-self-move,-Wno-non-virtual-dtor
 
-# Enable mypy running on python builds
-build --aspects=//bazel/pip:mypy.bzl%mypy_aspect
-build --output_groups=+mypy
+# Enable mypy running on python builds.
+#
+# Scoped per-OS rather than applied unconditionally, because the aspect is
+# attached to every target including C++ ones, and analysing it pulls in the
+# pip extension. On Windows ARM64 that fails: rules_python publishes no
+# aarch64-pc-windows-msvc interpreter for the older Pythons, so the 3.9 and
+# 3.10 toolchains never register and grpc_python_dependencies cannot resolve
+# its 3.9 interpreter. Note --aspects accumulates, so a build:windows section
+# cannot clear it; it has to not be added in the first place.
+build:linux --aspects=//bazel/pip:mypy.bzl%mypy_aspect
+build:linux --output_groups=+mypy
+build:macos --aspects=//bazel/pip:mypy.bzl%mypy_aspect
+build:macos --output_groups=+mypy
 
 build:disable-mypy --output_groups=-mypy
 
@@ -219,6 +236,15 @@ build:macos --strategy=CppLink=dynamic,remote,worker,sandboxed,standalone
 
 # https://github.com/bazelbuild/bazel/issues/25221
 build --strategy=TestRunner=remote,worker,sandboxed,standalone
+
+# NOTE: the Windows equivalents of the strategy lines above are emitted by
+# tools/bazel.bat into build/wrapper.bazelrc, not written here. Bazel has no
+# 'sandboxed' strategy on Windows and naming one is a hard error rather than a
+# fallback, so it has to be removed rather than overridden. A build:windows
+# section cannot do that: an auto-applied --config=windows expands before these
+# unconditional lines and is then overridden by them. wrapper.bazelrc is
+# imported after this file, so it wins, and it is already where the wrapper puts
+# host-specific configuration such as the macOS Xcode settings.
 
 build:linux --build_metadata=TAG_HOST_OS=linux
 build:linux --build_metadata=TAG_TARGET_OS=linux

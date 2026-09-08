@@ -11,11 +11,21 @@ LLVM_SHA = "7636ff70c60a2933a91362932127478b7b24a610ef1f01afa58fc2a4ecb125ed"
 
 PATCHES = [
     "//bazel/public-patches:llvm-lldb-exports.patch",
+    # LLDB remaps MCJIT sections from host to debuggee addresses and asks
+    # RuntimeDyld to relocate them again.  Do not reuse the first pass's COFF
+    # image base for the remapped image.
+    "//bazel/public-patches:llvm-rtdyld-coff-recompute-image-base.patch",
+    "//bazel/public-patches:llvm-rtdyld-coff-relocation-diagnostic.patch",
+    # On Windows the lldb driver stages its liblldb dependency beside itself.
+    # Keep the real DLL in a private output directory so that staged copy does
+    # not conflict with the link action that creates the DLL.
+    "//bazel/public-patches:llvm-lldb-windows-dll-output.patch",
     # https://github.com/llvm/llvm-project/pull/153352
     # https://linear.app/modularml/issue/MOCO-2322/llvm-upstream-change-conflicting-with-internal-code-that-addresses
     "//bazel/public-patches:llvm-machinefunction-sti-ref-to-ptr.patch",
     # https://github.com/llvm/llvm-project/pull/175650
     "//bazel/public-patches:llvm-fix-lldb-dap-console.patch",
+    "//bazel/public-patches:llvm-lldb-dap-windows-inline-api.patch",
     # Fix heap corruption in ObjectFileELF::GetModuleSpecifications: use a
     # local DataExtractor copy instead of mutating the shared extractor_sp,
     # which invalidated other DataExtractors sharing the same buffer and
@@ -44,6 +54,24 @@ PATCHES = [
     # header-only exposure, the .cpp only uses header-defined type aliases,
     # not anything requiring OrcJIT's/JITLink's .cpp-defined symbols.
     "//bazel/public-patches:llvm-orcshared-sps-rtbridge-headers.patch",
+    # blake3_neon.c cannot compile for aarch64-pc-windows-msvc: its
+    # __builtin_shufflevector calls operate on MSVC's __n128 union rather than a
+    # clang vector type. Selects BLAKE3's portable implementation there.
+    "//bazel/public-patches:llvm-blake3-no-neon-windows.patch",
+    # is_windows_msvc keys on the compiler being msvc-cl, so a clang driver
+    # targeting the MSVC ABI matched neither it nor the MinGW setting, and the
+    # link fell through to the Unix default of -lm, -lpthread and -ldl.
+    "//bazel/public-patches:llvm-windows-msvc-abi-with-clang-driver.patch",
+    # is_windows_clang_mingw also matches a clang driver targeting the MSVC ABI,
+    # and being more specialized it won the select and applied MinGW link flags.
+    "//bazel/public-patches:llvm-mingw-setting-x86-only.patch",
+    # The is_windows_msvc branches use linker spellings, which the clang driver
+    # reads as input filenames.
+    "//bazel/public-patches:llvm-msvc-linkopts-driver-syntax.patch",
+    "//bazel/public-patches:llvm-clang-msvc-linkopts-driver-syntax.patch",
+    # The overlay hardcodes Windows to X86, so a Windows ARM64 build gets
+    # LLVM_NATIVE_ARCH=X86 and an x86_64 default triple.
+    "//bazel/public-patches:llvm-windows-arm64-native-arch.patch",
 ]
 
 def _llvm_source_impl(module_ctx):

@@ -12,7 +12,15 @@ local.bazelrc
 /bazel-*
 /MODULE.bazel.lock
 /external
-build/
+# Build output at the repo ROOT only (bazelisk lands in ./build, and
+# .bazelrc imports build/wrapper.bazelrc). A bare `build/` matches at any
+# depth, and macOS turns on core.ignorecase, so it also matches `Build/` --
+# which silently swallows KGEN/tools/mojo/Build/ (mojo-build.cpp + its
+# tablegen) and KGEN/test/mojo-tool/build/. This tree's copies are already
+# tracked, so nothing was lost here; anchored so a newly added file under
+# those directories cannot go missing. MojoCocoa and MojoMacX64 both lost
+# sources to exactly this.
+/build/
 develop-eggs/
 dist/
 downloads/
@@ -37,6 +45,11 @@ MANIFEST
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# ...but Griddle's is source, not a build product: it is what declares
+# the process DPI-aware, and without it the editor renders blurry on
+# every display that is not 96 DPI. The rule above came from a Python
+# template and was never meant to reach here.
+!ide/griddle.manifest
 
 # Installer logs
 pip-log.txt
@@ -66,7 +79,11 @@ docs/_build/
 
 # PyBuilder
 .pybuilder/
-target/
+# Rust build directory, at the repo ROOT only. Same hazard as `build/`
+# above: a bare `target/` case-insensitively matches every KGEN and Support
+# .../Target/ SOURCE directory -- TargetTraits, TargetLowering, the Host
+# backend, the GPU backend trio.
+/target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -169,3 +186,67 @@ docs/releases/nightly.md
 mojo/docs/releases/nightly.md
 
 .bazelignore
+
+# DragonMax: KGEN's Target/ directories are compiler source, not build output.
+# The bare `target/` rule above (meant for Rust build dirs) swallows them on
+# case-insensitive filesystems, which silently drops new backend files from
+# commits. Re-include them.
+!KGEN/**/Target/
+!KGEN/**/Target/**
+
+# WINMOJO x64: machine-local tools and editor state
+/.codex/
+/.vs/
+/.idea/
+*.suo
+*.user
+*.VC.db
+*.opendb
+
+# Windows compiler, linker, debugger, and crash output. Bazel output lives
+# under /bazel-* above; these cover direct local builds and diagnostics.
+*.obj
+*.pdb
+*.ilk
+*.tlog
+*.lastbuildstate
+*.dmp
+*.stackdump
+*.tmp
+*.bak
+*~
+
+# Mojo JIT/compiler caches and standalone runtime state
+.mojo_cache/
+/cache/
+/crashdb/
+/release-output/
+/mojo_release/
+/.direct-build/
+/compile_commands.json
+
+# Root-level ad-hoc compiler and GPU diagnostics. Keep these root-scoped so
+# LLVM/MLIR fixtures with the same extensions elsewhere remain visible.
+/*.exe
+/*.dll
+/*.lib
+/*.exp
+/*.ptx
+/*.cubin
+/*.fatbin
+/*.ll
+/*.asm
+
+# COM spike oracle, built on demand by run-com-checks.ps1
+spikes/com/oracle_stream.dll
+spikes/com/*.obj
+
+# Griddle writes where you left off into the project it opened. That is
+# one developer's window state, not a fact about the project.
+.griddle-session.json
+
+# Building an example from the IDE writes the binary beside its source.
+# The sources are the deliverable; what a build makes of them is not.
+examples/**/*.exe
+examples/**/*.lib
+examples/**/*.pdb

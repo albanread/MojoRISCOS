@@ -2220,6 +2220,16 @@ struct DeviceStream(ImplicitlyCopyable, _FunctionEnqueuer):
         # memory size, and attribute count (see `MojoBindings.cpp`), so the
         # emitted `external_call` signature lines up with the runtime symbol
         # and with the other enqueue launch paths.
+        # `arg_sizes` crosses as an address, not as an `OptionalPointer`.
+        # `Optional[Pointer]` is niche-optimised to one pointer-sized field,
+        # but it still lowers as a nested aggregate --
+        # `!kgen.struct<(struct<(struct<(pointer<none>) memoryOnly>)>)>` -- and
+        # `pop.external_call` passes that indirectly. The callee then reads a
+        # null `argSizes` and silently falls back to pointer-sized arguments,
+        # which is right for buffers and wrong for scalars: the first symptom
+        # is CL_INVALID_ARG_SIZE on whichever argument happens to be a scalar,
+        # with nothing pointing at the ABI. Passing the address keeps the
+        # nullable-pointer C parameter exactly one register wide.
         return external_call[
             "AsyncRT_DeviceStream_enqueueFunctionDirect", _CString[]
         ](
@@ -2236,7 +2246,7 @@ struct DeviceStream(ImplicitlyCopyable, _FunctionEnqueuer):
             c_uint(num_attributes),
             args,
             arg_count,
-            arg_sizes,
+            Int(arg_sizes.value()) if arg_sizes else 0,
         )
 
     @doc_hidden
@@ -2568,7 +2578,7 @@ struct EventFlags(TrivialRegisterPassable):
 
 
 struct CompletionFlag(ImplicitlyCopyable):
-    """Non-owning handle to an MLRT ``CompletionFlag``.
+    """A host-visible 64-bit completion flag that a GPU stream can wait on.
 
     A ``CompletionFlag`` is an 8-byte slot in pinned host memory mapped
     into a device's address space. A CPU thread (or an AsyncRT worker
@@ -2578,19 +2588,29 @@ struct CompletionFlag(ImplicitlyCopyable):
     block on a value produced by a host thread without a second stream
     or a blocking host callback on the consumer's critical path.
 
-    This struct is intentionally non-owning. The C++
-    ``M::Driver::CompletionFlag`` it points to is allocated and
-    freed elsewhere (typically by `max.driver.CompletionFlag` on the
-    Python side), and the caller is responsible for keeping the
-    underlying allocation alive for the duration of any in-flight
-    use. Constructed from a raw pointer extracted from a graph-op
-    payload buffer; do not allocate or free through this wrapper.
+    Constructing from a `DeviceContext` allocates an owning flag through
+    AsyncRT. The raw-handle initializers remain non-owning for graph-op
+    payloads created by another host API.
 
     Currently usable only on CUDA-backed devices, matching
     `DeviceStream.wait_for_host_value`.
     """
 
     var _handle: _CompletionFlagPtr[mut=True]
+    var _owning: Bool
+
+    @always_inline
+    def __init__(out self, ctx: DeviceContext) raises:
+        """Allocates a zero-initialized flag mapped into the device address space."""
+        var result: _CompletionFlagPtr[mut=True] = {}
+        _checked(
+            external_call[
+                "AsyncRT_CompletionFlag_create",
+                _CString[],
+            ](Pointer(to=result), ctx._handle)
+        )
+        self._handle = result
+        self._owning = True
 
     @always_inline
     def __init__(out self, *, handle: _CompletionFlagPtr[mut=True]):
@@ -2603,6 +2623,7 @@ struct CompletionFlag(ImplicitlyCopyable):
                 responsibility.
         """
         self._handle = handle
+        self._owning = False
 
     @always_inline
     def __init__(out self, *, unsafe_from_address: Int):
@@ -2622,6 +2643,41 @@ struct CompletionFlag(ImplicitlyCopyable):
         """
         self._handle = Pointer[_CompletionFlagCpp, MutUntrackedOrigin](
             unsafe_from_address=unsafe_from_address
+        )
+        self._owning = False
+
+    @doc_hidden
+    def __init__(out self, *, copy: Self):
+        self._handle = copy._handle
+        self._owning = copy._owning
+        if self._owning:
+            external_call["AsyncRT_CompletionFlag_retain", NoneType](
+                self._handle
+            )
+
+    def __deinit__(deinit self):
+        if self._owning:
+            external_call["AsyncRT_CompletionFlag_release", NoneType](
+                self._handle
+            )
+
+    @always_inline
+    def signal(self, value: UInt64):
+        """Publishes `value` to the flag with release ordering."""
+        external_call["AsyncRT_CompletionFlag_signal", NoneType](
+            self._handle, value
+        )
+
+    @always_inline
+    def reset(self):
+        """Resets the flag to zero."""
+        external_call["AsyncRT_CompletionFlag_reset", NoneType](self._handle)
+
+    @always_inline
+    def load(self) -> UInt64:
+        """Loads the current value with acquire ordering."""
+        return external_call["AsyncRT_CompletionFlag_load", UInt64](
+            self._handle
         )
 
     @always_inline
@@ -3355,16 +3411,29 @@ struct DeviceFunction[
         var dense_args_addrs: Pointer[
             OpaquePointer[MutAnyOrigin], MutUntrackedOrigin
         ]
+        # Sizes travel with the addresses. A backend that binds arguments by
+        # size rather than by a pre-declared signature -- OpenCL's
+        # `clSetKernelArg` does -- has no other way to know that argument 3 is
+        # a 4-byte float and not an 8-byte pointer, and guessing pointer-sized
+        # fails only on the scalars, only at launch, with an error that names
+        # the argument index and nothing else.
+        var dense_args_sizes: Pointer[UInt64, MutUntrackedOrigin]
         if num_captures > num_captures_static:
             dense_args_addrs = alloc(
                 Layout[OpaquePointer[MutAnyOrigin]](
                     count=num_captures + num_passed_args
                 )
             ).unsafe_leak()
+            dense_args_sizes = alloc(
+                Layout[UInt64](count=num_captures + num_passed_args)
+            ).unsafe_leak()
         else:
             dense_args_addrs = unsafe_stack_allocation[
                 num_captures_static + num_passed_args,
                 OpaquePointer[MutAnyOrigin],
+            ]()
+            dense_args_sizes = unsafe_stack_allocation[
+                num_captures_static + num_passed_args, UInt64
             ]()
 
         if num_captures > 0:
@@ -3441,6 +3510,14 @@ struct DeviceFunction[
                     dense_args_addrs[
                         unsafe_offset=translated_arg_idx
                     ] = first_word_addr.as_unsafe_any_origin()
+                    # The DEVICE type's size, and unaligned: `clSetKernelArg`
+                    # wants the argument's own width, not its padded stride in
+                    # the staging buffer.
+                    dense_args_sizes[unsafe_offset=translated_arg_idx] = (
+                        UInt64(
+                            size_of[Ts[i].device_type, target=Self.target]()
+                        )
+                    )
                     translated_arg_idx += 1
 
             # Drop zero-sized captures so the packed slots match the device
@@ -3451,6 +3528,7 @@ struct DeviceFunction[
                 self._func_impl.capture_sizes,
                 num_translated_args,
                 num_captures,
+                dense_args_sizes=dense_args_sizes,
             )
 
             _checked_call[Self.func](
@@ -3463,7 +3541,9 @@ struct DeviceFunction[
                     len(attributes),
                     dense_args_addrs.as_unsafe_any_origin(),
                     UInt32(effective_argc),
-                    Optional[Pointer[UInt64, MutUntrackedOrigin]](),
+                    Optional[Pointer[UInt64, MutUntrackedOrigin]](
+                        dense_args_sizes
+                    ),
                 ),
                 device_context=self._context,
                 location=location.or_else(call_location()),
@@ -3860,6 +3940,16 @@ struct DeviceContext(ImplicitlyCopyable, RegisterPassable, _FunctionEnqueuer):
         # paths declare `AsyncRT_DeviceContext_enqueueFunctionDirect` with
         # conflicting (i64 vs i32) signatures, which fails to legalize when a
         # graph composes both launch paths into one module.
+        # `arg_sizes` crosses as an address, not as an `OptionalPointer`.
+        # `Optional[Pointer]` is niche-optimised to one pointer-sized field,
+        # but it still lowers as a nested aggregate --
+        # `!kgen.struct<(struct<(struct<(pointer<none>) memoryOnly>)>)>` -- and
+        # `pop.external_call` passes that indirectly. The callee then reads a
+        # null `argSizes` and silently falls back to pointer-sized arguments,
+        # which is right for buffers and wrong for scalars: the first symptom
+        # is CL_INVALID_ARG_SIZE on whichever argument happens to be a scalar,
+        # with nothing pointing at the ABI. Passing the address keeps the
+        # nullable-pointer C parameter exactly one register wide.
         return external_call[
             "AsyncRT_DeviceContext_enqueueFunctionDirect", _CString[]
         ](
@@ -3876,7 +3966,7 @@ struct DeviceContext(ImplicitlyCopyable, RegisterPassable, _FunctionEnqueuer):
             c_uint(num_attributes),
             args,
             arg_count,
-            arg_sizes,
+            Int(arg_sizes.value()) if arg_sizes else 0,
         )
 
     @always_inline
@@ -6588,7 +6678,7 @@ struct DeviceContext(ImplicitlyCopyable, RegisterPassable, _FunctionEnqueuer):
         var num_devices = DeviceContext.number_of_devices()
         ```
         """
-        # int32_t *AsyncRT_DeviceContext_numberOfDevices(const char* kind)
+        # int32_t AsyncRT_DeviceContext_numberOfDevices(const char* kind)
         return Int(
             external_call[
                 "AsyncRT_DeviceContext_numberOfDevices",

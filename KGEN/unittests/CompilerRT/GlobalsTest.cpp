@@ -24,12 +24,29 @@ using namespace M;
 
 // These are forward declarations from Globals.cpp.
 COMPILERRT_EXPORT void *
-KGEN_CompilerRT_GetOrCreateGlobal(llvm::StringRef name, void *(*initFn)(),
-                                  void (*destroyFn)(void *));
-COMPILERRT_EXPORT void *KGEN_CompilerRT_GetGlobalOrNull(llvm::StringRef name);
-COMPILERRT_EXPORT void KGEN_CompilerRT_InsertGlobal(llvm::StringRef name,
+KGEN_CompilerRT_GetOrCreateGlobal(const char *nameData, size_t nameLength,
+                                  void *(*initFn)(), void (*destroyFn)(void *));
+COMPILERRT_EXPORT void *KGEN_CompilerRT_GetGlobalOrNull(const char *nameData,
+                                                        size_t nameLength);
+COMPILERRT_EXPORT void KGEN_CompilerRT_InsertGlobal(const char *nameData,
+                                                    size_t nameLength,
                                                     void *value);
 COMPILERRT_EXPORT void KGEN_CompilerRT_DestroyGlobals();
+
+static void *KGEN_CompilerRT_GetOrCreateGlobal(llvm::StringRef name,
+                                               void *(*initFn)(),
+                                               void (*destroyFn)(void *)) {
+  return KGEN_CompilerRT_GetOrCreateGlobal(name.data(), name.size(), initFn,
+                                           destroyFn);
+}
+
+static void *KGEN_CompilerRT_GetGlobalOrNull(llvm::StringRef name) {
+  return KGEN_CompilerRT_GetGlobalOrNull(name.data(), name.size());
+}
+
+static void KGEN_CompilerRT_InsertGlobal(llvm::StringRef name, void *value) {
+  KGEN_CompilerRT_InsertGlobal(name.data(), name.size(), value);
+}
 
 namespace {
 

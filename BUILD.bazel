@@ -60,6 +60,62 @@ alias(
     tags = [ALLOW_UNUSED_TAG],
 )
 
+# Source-controlled platforms for this port's native x86-64 NVIDIA targets.
+# Each selects both the NVPTX compiler toolchain and the Windows CUDA runtime.
+#
+# rules_mojo probed GPUs only on Linux and macOS, which is why these exist;
+# bazel/public-patches/rules_mojo_windows_gpu_detect.patch now extends that to
+# Windows, so @mojo_host_platform identifies the installed card on its own and
+# the default build needs no --config at all. These remain the explicit form:
+# naming one builds for that card whether or not it is present, which is how
+# each machine cross-compiles for the other's GPU. Distinct platforms get
+# distinct output paths, so both stay warm in the disk cache side by side
+# rather than invalidating each other.
+platform(
+    name = "windows_x86_64_nvidia_blackwell",
+    constraint_values = [
+        "@mojo_gpu_toolchains//:has_gpu",
+        "@mojo_gpu_toolchains//:nvidia_gpu",
+        "@mojo_gpu_toolchains//:rtxpro2000blackwell_gpu",
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Turing TU117, compute capability 7.5 — five generations below the Blackwell
+# part. No bf16, no cp.async, and no tensor cores at all, so this is the
+# portability check rather than a performance target: a kernel that compiles
+# and runs on both ends of that span is portable in a way one card cannot show.
+platform(
+    name = "windows_x86_64_nvidia_t1000",
+    constraint_values = [
+        "@mojo_gpu_toolchains//:has_gpu",
+        "@mojo_gpu_toolchains//:nvidia_gpu",
+        "@mojo_gpu_toolchains//:t1000_gpu",
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Ampere GA106, compute capability 8.6. Unlike the T1000 this clears
+# _is_sm_8x_or_newer(), so cp.async, mbarrier, bf16 and tensor cores are all
+# available; only the sm_90+ tier (TMA, clusters, wgmma) and sm_100+ tcgen05
+# remain out of reach. NOT hardware-tested: the card lives in a machine that
+# has not been powered up for this, so treat it as compile-verified only.
+platform(
+    name = "windows_x86_64_nvidia_rtx3060",
+    constraint_values = [
+        "@mojo_gpu_toolchains//:has_gpu",
+        "@mojo_gpu_toolchains//:nvidia_gpu",
+        "@mojo_gpu_toolchains//:rtx3060_gpu",
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 [
     alias(
         name = "{}_gpu".format(gpu),
@@ -156,6 +212,20 @@ config_setting(
             "macos",
             ["@platforms//os:macos"],
         ),
+        (
+            "windows_arm64",
+            [
+                "@platforms//cpu:aarch64",
+                "@platforms//os:windows",
+            ],
+        ),
+        (
+            "windows_x86_64",
+            [
+                "@platforms//cpu:x86_64",
+                "@platforms//os:windows",
+            ],
+        ),
     ]
 ]
 
@@ -172,6 +242,22 @@ config_setting(
     constraint_values = [
         "@platforms//cpu:aarch64",
         "@platforms//os:linux",
+    ],
+)
+
+config_setting(
+    name = "windows_arm64",
+    constraint_values = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:windows",
+    ],
+)
+
+config_setting(
+    name = "windows_x86_64",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
     ],
 )
 

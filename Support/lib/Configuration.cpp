@@ -26,6 +26,7 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
@@ -71,6 +72,31 @@ static ErrorOrSuccess createPath(const std::filesystem::path &path) {
   return success();
 }
 
+/// Whether a scratch file can be created in the directory holding `file`.
+///
+/// The only honest test of writability on Windows. `sys::fs::access(dir,
+/// Write)` consults the READONLY file attribute and nothing else, so a
+/// directory that denies writes by PERMISSION -- C:\Program Files\WindowsApps
+/// under MSIX, or any installation an administrator has locked down -- reports
+/// as writable. The configuration read below then tries to take a lock, the
+/// lock file cannot be created beside modular.cfg, and the compiler dies
+/// before it has parsed a line. The failure was found by making an installed
+/// tree read-only and watching `mojo run` crash with a C++ exception.
+///
+/// So the test is the operation itself: create a uniquely named file where
+/// the lock would go, and remove it again.
+static bool canWriteBeside(const std::filesystem::path &file) {
+  llvm::SmallString<256> model(file.parent_path().string());
+  llvm::sys::path::append(model, "modular.cfg.probe-%%%%%%%%");
+  int fd = -1;
+  llvm::SmallString<256> made;
+  if (llvm::sys::fs::createUniqueFile(model, fd, made))
+    return false;
+  llvm::sys::Process::SafelyCloseFileDescriptor(fd);
+  llvm::sys::fs::remove(made);
+  return true;
+}
+
 ErrorOr<Config> Config::open() {
   // Parse MODULAR_DEBUG once so `max-debug.*` overrides are visible to every
   // subsequent `maybeGetValue()` call — including from standalone Mojo
@@ -106,10 +132,12 @@ ErrorOr<Config> Config::open() {
     llvm::SourceMgr sourceMgr;
     unsigned bufferIdx = 0;
 
-    // Check the permissions for the directory containing the configuration. If
-    // it's not writeable, then we avoid acquiring the lock.
-    if (llvm::sys::fs::access(configFilePathOr->parent_path().string(),
-                              llvm::sys::fs::AccessMode::Write)) {
+    // If the directory containing the configuration cannot be written, read
+    // without the lock. A package's configuration has no writers to
+    // serialize against, and taking the lock is what used to kill the
+    // compiler on a read-only tree; see canWriteBeside for why the obvious
+    // permission check is not used.
+    if (!canWriteBeside(*configFilePathOr)) {
       // We don't have write permission here, so we can just read it without a
       // lock.
       auto mBufOr = llvm::MemoryBuffer::getFile(configFilePathOr->string(),
@@ -152,6 +180,23 @@ ErrorOr<Config> Config::open() {
     if (ErrorOrSuccess err = cfg.parseFrom(mbuf->getBuffer(), &sourceMgr)) {
       initError = err.takeError();
       return;
+    }
+
+    // Where the file lives, recorded so that relative paths resolve against
+    // it and so that `@ROOT@` in any value means "this package". This is what
+    // lets one modular.cfg describe a tree wherever that tree is unpacked,
+    // instead of being rewritten for each place it lands -- which a read-only
+    // package cannot have done to it at all.
+    {
+      const std::string root = configFilePathOr->parent_path().string();
+      cfg.kv["config_dir"] = root;
+      constexpr llvm::StringLiteral token = "@ROOT@";
+      for (auto &entry : cfg.kv) {
+        std::string &value = entry.second;
+        for (size_t at = value.find(token.str()); at != std::string::npos;
+             at = value.find(token.str(), at + root.size()))
+          value.replace(at, token.size(), root);
+      }
     }
 
     // Cache the parsed key-value map for future calls.
@@ -297,8 +342,19 @@ StringRef Config::getPath(StringRef key, StringRef relativePath) {
 
   const auto [section, _] = key.split('.');
   StringRef packageRoot = getValue((section + ".package_root").str());
+  // A configuration that names no package_root is describing the package it
+  // sits in. Every default relative path this function is handed -- bin/mojo,
+  // lib/std.mojoc, lib/windows_api.db -- is laid out under exactly that
+  // directory in a release, so a release needs to state none of them.
+  //
+  // Resolved into a std::string BEFORE the reference below is taken: getValue
+  // can insert into the map, and an insertion may move what a reference into
+  // it points at.
+  if (packageRoot.empty())
+    packageRoot = getValue("config_dir");
+  const std::string rootStr = packageRoot.str();
   std::string &value = kv[keyStr];
-  value = (packageRoot + "/" + relativePath).str();
+  value = rootStr + "/" + relativePath.str();
   return value;
 }
 
@@ -515,10 +571,45 @@ static void getSearchPaths(SmallVectorImpl<std::filesystem::path> &paths,
   // Add /opt/modular as a global destination.
   paths.push_back("/opt/modular");
 #else  // _WIN32
-  // Add $APPDATA\Local\Modular
-  auto defaultRoot = llvm::sys::Process::GetEnv("APPDATA");
-  assert(defaultRoot.has_value() && "Must have APPDATA");
-  paths.push_back(std::filesystem::path(*defaultRoot) / "Local" / "Modular");
+  // THE PACKAGE THE RUNNING EXECUTABLE BELONGS TO, for configuration only.
+  //
+  // A release is a tree with bin\ and lib\ under one root and modular.cfg at
+  // that root. Before this, nothing on Windows ever looked there: with no
+  // MODULAR_HOME the search fell through to a path under APPDATA that does
+  // not exist, and `mojo.exe` answered "unable to locate module 'std'" on a
+  // complete installation unless a launcher script had set the variable for
+  // it. Finding the package from the executable's own location is what lets
+  // a tree be unpacked anywhere and run, and it is what an MSIX package
+  // requires, since its install path carries the version and changes on
+  // every update.
+  //
+  // Only the CONFIG folder resolves into the package. Data and cache never
+  // do: the package may be read-only, and under MSIX it always is.
+  if (type == FolderType::Config) {
+    std::string exe = llvm::sys::fs::getMainExecutable(
+        nullptr, reinterpret_cast<void *>(&getSearchPaths));
+    if (!exe.empty()) {
+      std::filesystem::path root =
+          std::filesystem::path(exe).parent_path().parent_path();
+      std::error_code ec;
+      if (std::filesystem::exists(root / "modular.cfg", ec))
+        paths.push_back(root);
+    }
+  }
+
+  // The user's own folder for everything the toolchain writes: the cache,
+  // the crash database, and a configuration for anyone who has no package.
+  // LOCALAPPDATA, not APPDATA -- the previous code built
+  // "%APPDATA%\Local\Modular", which puts "Local" under the ROAMING profile,
+  // a directory that exists on no machine.
+  auto localAppData = llvm::sys::Process::GetEnv("LOCALAPPDATA");
+  if (localAppData) {
+    auto base = std::filesystem::path(*localAppData) / "WinMojo";
+    if (type == FolderType::Cache)
+      paths.push_back(base / "cache");
+    else
+      paths.push_back(base);
+  }
 #endif // _WIN32
 
   if (isCacheLogEnabled()) {

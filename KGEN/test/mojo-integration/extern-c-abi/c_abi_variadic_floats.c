@@ -1,3 +1,7 @@
+// Copyright (c) 2026, Alban Read.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 // C ABI variadic function tests for FLOAT arguments
 // Mojo tests: test_variadic_floats_*.mojo, test_variadic_float_*.mojo,
 // test_variadic_mixed_*.mojo Tests variadic float/double handling and struct

@@ -1,0 +1,115 @@
+THIRD-PARTY NOTICES -- WinMojo for Windows x64
+==============================================
+
+This file describes third-party software contained in the WinMojo Windows
+package. It is written against what the package ACTUALLY CONTAINS, checked
+against the staged tree, rather than inherited from an upstream notices file
+describing a different product.
+
+That distinction is the reason this file exists. The package used to ship
+upstream's cross-product Third-Party-Notices, which carries the full LICENSE
+AGREEMENT FOR NVIDIA SOFTWARE DEVELOPMENT KITS for NVSHMEM -- a component that
+is not in this package and never has been. It also shipped the Modular
+Community License, which governs downloading Modular's SDK, something this
+package neither is nor contains.
+
+WinMojo's own code is Copyright (c) 2026, Alban Read, licensed under the
+Apache License v2.0 with LLVM Exceptions. See LICENSE in the root of this
+installation.
+
+
+Mojo and MAX (upstream)
+-----------------------
+This is an unofficial fork of the Modular Platform. The compiler, the standard
+library and the MAX libraries are derived from modular/modular.
+
+    Copyright (c) Modular Inc. All rights reserved.
+    Apache License v2.0 with LLVM Exceptions -- https://llvm.org/LICENSE.txt
+
+Shipped as: bin\mojo.exe, bin\mojo-lsp-server.exe, lib\std.mojoc,
+lib\max.mojoc, lib\KGENCompilerRTShared.dll, lib\AsyncRTRuntimeGlobals.dll,
+lib\MSupportGlobals.dll, lib\nvptxrt.dll, lib\MojoLLDB.dll.
+
+
+The LLVM Project
+----------------
+LLVM, LLD and LLDB, both as separate executables and as libraries linked into
+the compiler and the debugger plugin.
+
+    Copyright (c) the LLVM Project contributors.
+    Apache License v2.0 with LLVM Exceptions -- https://llvm.org/LICENSE.txt
+
+Shipped as: bin\lld.exe, bin\lld-link.exe, bin\lldb-dap.exe,
+bin\lldb-argdumper.exe, bin\llvm-symbolizer.exe, bin\lldb24.0.0git.dll,
+bin\mojo-lldb.exe, and code linked into bin\mojo.exe and lib\MojoLLDB.dll.
+
+
+Crashpad
+--------
+The out-of-process crash handler.
+
+    Copyright (c) The Crashpad Authors.
+    Apache License 2.0 -- https://www.apache.org/licenses/LICENSE-2.0
+
+Shipped as: bin\modular-crashpad-handler.exe.
+
+
+CPython
+-------
+A complete CPython 3.13 runtime is bundled so that Mojo's Python interop and
+the IDE's per-project virtual environments work without a separate Python
+installation.
+
+    Copyright (c) 2001-2026 Python Software Foundation. All rights reserved.
+    PSF License Agreement -- see python\LICENSE.txt in this installation.
+
+python\LICENSE.txt is the authoritative text and includes the section
+"Additional Conditions for this Windows binary build", which covers the
+components redistributed with the Windows binary distribution.
+
+Shipped as: the python\ directory, including its standard library and the pip
+and setuptools wheels used to bootstrap virtual environments.
+
+
+Microsoft Distributable Code
+----------------------------
+The Microsoft Visual C++ runtime libraries, redistributed with the CPython
+Windows binary build under the Microsoft Distributable Code terms that
+accompany Visual Studio.
+
+    Copyright (c) Microsoft Corporation.
+
+Shipped as: python\vcruntime140.dll, python\vcruntime140_1.dll.
+
+
+NSIS
+----
+Nullsoft Scriptable Install System, used to build the setup program. Its
+installer stub is part of the setup executable; nothing from NSIS is installed
+onto the target machine.
+
+    Copyright (c) 1999-2025 Contributors.
+    zlib/libpng license -- https://nsis.sourceforge.io/License
+
+
+NOT included
+------------
+Two things are worth stating explicitly, because an earlier notices file
+implied otherwise.
+
+NO NVIDIA SOFTWARE IS REDISTRIBUTED. GPU support is provided by lib\nvptxrt.dll,
+which is built from this repository and imports nvcuda.dll -- a component of
+the NVIDIA display driver already installed on the user's machine. No CUDA
+Toolkit, CUDA redistributable, NVSHMEM or other NVIDIA SDK component is present
+in this package, and no NVIDIA licence applies to it.
+
+NO MSVC TOOLCHAIN IS REDISTRIBUTED. Linking uses the bundled LLD, and the MSVC
+and UCRT import libraries are located on the user's own Visual Studio or Build
+Tools installation at build time; see vsenv.cmd.
+
+
+Other components
+----------------
+lib\windows_api.db, the Win32 metadata database the compiler queries, is
+published by this project at github.com/albanread/WRASM and is covered by this
+package's own licence rather than a third party's.

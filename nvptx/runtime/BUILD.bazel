@@ -1,0 +1,58 @@
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("//bazel:api.bzl", "modular_cc_library")
+load("//bazel/windows:import_library.bzl", "windows_import_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# MAX's AsyncRT device ABI implemented against the NVIDIA CUDA driver API.
+# nvcuda.dll is loaded dynamically, so the compiler/runtime build has no CUDA
+# toolkit dependency; PTX is JIT-compiled by the installed Windows driver.
+modular_cc_library(
+    name = "nvptxrt",
+    srcs = ["nvptxrt.cpp"],
+    # The CPU worker pool catches exceptions escaping a queued task. The
+    # toolchain compiles the tree with -fno-exceptions
+    # (bazel/internal/cc-toolchain/args/BUILD.bazel), so without this the
+    # translation unit fails outright with "cannot use 'try' with exceptions
+    # disabled". Scoped to this target, matching how the tree already grants
+    # -fexceptions to nixl in common.bazelrc; exceptions are caught inside the
+    # worker and never cross the DLL boundary.
+    copts = ["-fexceptions"],
+    target_compatible_with = [
+        "@mojo_gpu_toolchains//:nvidia_gpu",
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+    ],
+)
+
+# Shared form for `mojo run` and other JIT clients that load AsyncRT providers
+# through MODULAR_MOJO_MAX_SHARED_LIBS.
+cc_binary(
+    name = "nvptxrt.dll",
+    srcs = ["nvptxrt.cpp"],
+    linkshared = True,
+    # The CPU worker pool catches exceptions escaping a queued task. The
+    # toolchain compiles the tree with -fno-exceptions
+    # (bazel/internal/cc-toolchain/args/BUILD.bazel), so without this the
+    # translation unit fails outright with "cannot use 'try' with exceptions
+    # disabled". Scoped to this target, matching how the tree already grants
+    # -fexceptions to nixl in common.bazelrc; exceptions are caught inside the
+    # worker and never cross the DLL boundary.
+    copts = ["-fexceptions"],
+    target_compatible_with = [
+        "@mojo_gpu_toolchains//:nvidia_gpu",
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+    ],
+)
+
+# The import library for nvptxrt.dll, so a program links the runtime the way
+# it links KGENCompilerRTShared, AsyncRTRuntimeGlobals and MSupportGlobals:
+# a few kilobytes of import stubs, and the code in a DLL that is fixed once
+# for every program that loads it. Named `.if.lib` because `nvptxrt.lib` in
+# this package is the static archive Bazel-built Mojo targets still link.
+windows_import_library(
+    name = "nvptxrt_implib",
+    dll = ":nvptxrt.dll",
+    out = "nvptxrt.if.lib",
+)
