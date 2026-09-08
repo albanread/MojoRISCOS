@@ -46,6 +46,12 @@ InstallDir "$LOCALAPPDATA\WinMojo\app"
 ; A previous install's choice of directory wins over the default.
 InstallDirRegKey HKCU "Software\WinMojo" "InstallDir"
 
+; For broadcasting the environment change below. Without the broadcast the
+; variable is in the registry and no already-running program knows it, so it
+; takes effect at the next sign-in and looks like it did not work.
+!define HWND_BROADCAST 0xFFFF
+!define WM_SETTINGCHANGE 0x001A
+
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
 
@@ -109,6 +115,25 @@ Section "Toolchain and IDE" SecCore
   ; plain `mojo build` from mojo-shell.cmd deserves the same head start.
   nsExec::ExecToLog 'cmd /c call "$INSTDIR\paths.cmd"'
   Pop $0
+
+  ; MODULAR_HOME, so the compiler works when it is not started by a launcher.
+  ;
+  ; `bin\mojo.exe` cannot find modular.cfg on its own -- not beside itself, not
+  ; one directory up, where this installer just wrote it. It reads MODULAR_HOME
+  ; and nothing else. The .cmd launchers in the root set it for the length of
+  ; one command, which is why `mojo-shell.cmd` works and is also why the
+  ; problem stayed hidden: the natural thing, putting $INSTDIR\bin on PATH and
+  ; typing `mojo`, produces
+  ;
+  ;     error: unable to locate module 'std'
+  ;
+  ; on a complete and correct installation. That reads as a broken toolchain,
+  ; and people do not report it, they give up.
+  ;
+  ; Per-user, like everything else this installer writes, and removed on
+  ; uninstall only when it still names this installation.
+  WriteRegExpandStr HKCU "Environment" "MODULAR_HOME" "$INSTDIR"
+  SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
 
   ; Apps & Features, per user.
   WriteRegStr HKCU "Software\WinMojo" "InstallDir" "$INSTDIR"
@@ -194,6 +219,15 @@ Section "Uninstall"
   Delete "$DESKTOP\Griddle.lnk"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WinMojo"
   DeleteRegKey HKCU "Software\WinMojo"
+
+  ; MODULAR_HOME goes only if it still points here. A second installation
+  ; elsewhere will have overwritten it, and removing that one's value while
+  ; uninstalling this one would break the copy the person kept.
+  ReadRegStr $0 HKCU "Environment" "MODULAR_HOME"
+  StrCmp $0 "$INSTDIR" 0 winmojo_keep_env
+    DeleteRegValue HKCU "Environment" "MODULAR_HOME"
+    SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
+  winmojo_keep_env:
 
   ; ---- the user's own data, and only if they say so ----------------------
   ; %LOCALAPPDATA%\Griddle is Griddle's, not the installation's: the

@@ -207,15 +207,21 @@ if (Test-Path $cfgPath) {
 # machine does not. Cleared for every case below, so nothing passes because of
 # something only this checkout provides.
 #
-# MODULAR_HOME is deliberately NOT in this list, and that is the whole point of
-# the case below it. `bin\mojo.exe` cannot find modular.cfg by itself -- not
-# beside itself, not one directory up where the installer writes it. It reads
-# MODULAR_HOME and nothing else, so on a machine where nothing sets it the
-# compiler answers `unable to locate module 'std'` on a complete and correct
-# installation. The installer sets it now; what this checks is that a shell
-# which inherits it, the way any shell opened after installation does, gets a
-# working compiler.
-$scrub = @('MODULAR_MOJO_MAX_WINKB_PATH', 'MOJO_PYTHON', 'MOJO_PYTHON_LIBRARY', 'GRIDDLE_PYTHON_HOME')
+# `bin\mojo.exe` cannot find modular.cfg by itself -- not beside itself, not one
+# directory up where the installer writes it. It reads MODULAR_HOME and nothing
+# else, so on a machine where nothing sets it the compiler answers
+# `unable to locate module 'std'` on a complete and correct installation. The
+# installer registers it now; what the case below checks is that a shell which
+# inherits it from the registry, the way any shell opened after installation
+# does, gets a working compiler -- and nothing else.
+# MODULAR_HOME IS IN THIS LIST, and the case below then puts back only what
+# the registry says. It has to be, because this script is run by
+# `make_setup.ps1` in the same PowerShell process as `check-packaged.ps1`,
+# which sets $env:MODULAR_HOME to the STAGING tree -- so a child inheriting it
+# reads the stdlib out of the staging directory and passes no matter what the
+# installation contains. That is precisely the sort of pass this whole file
+# exists to stop, and it happened on the first gated build.
+$scrub = @('MODULAR_HOME', 'MODULAR_MOJO_MAX_WINKB_PATH', 'MOJO_PYTHON', 'MOJO_PYTHON_LIBRARY', 'GRIDDLE_PYTHON_HOME')
 
 # Read from the registry rather than from this process: this process may have
 # been started before the install, and an installer's environment change only
