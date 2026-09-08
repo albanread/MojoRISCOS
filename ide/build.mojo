@@ -186,6 +186,126 @@ def _append(var text: String):
     g_serial()[] += 1
 
 
+def runtime_dirs() raises -> List[String]:
+    """Where the DLLs a Mojo program imports live, in this toolchain.
+
+    Four of them -- KGENCompilerRTShared, AsyncRTRuntimeGlobals,
+    MSupportGlobals and nvptxrt -- and a built program imports them by name.
+    An installed release keeps them in `lib`, with copies in `bin` so
+    griddle.exe itself loads when launched directly; a source tree scatters
+    them across the bazel outputs they were built in.
+
+    Named once here because two things need them and they must not disagree:
+    the PATH a child process inherits, and the directory a built executable
+    is written into.
+
+    Returns:
+        The directories, in the order they should be searched.
+
+    Raises:
+        If the toolchain layout cannot be determined.
+    """
+    var runtime = List[String]()
+    if layout_name() == "installed":
+        var root = toolchain_root()
+        runtime.append(root + chr(0x5C) + "bin")
+        runtime.append(root + chr(0x5C) + "lib")
+    else:
+        runtime.append(absolute("bazel-bin/KGEN"))
+        runtime.append(absolute("bazel-bin/AsyncRT"))
+        runtime.append(absolute("bazel-bin/Support"))
+        # And the NVIDIA device runtime, a DLL since it stopped being linked
+        # into every GPU program as a static archive. A program built from
+        # the editor imports it by name and finds it here.
+        runtime.append(absolute("bazel-bin/nvptx/runtime"))
+        runtime.append(
+            absolute("bazel-bin/external/+llvm_configure+llvm-project/lldb")
+        )
+    return runtime^
+
+
+def program_runtime() -> List[String]:
+    """The DLLs a built Mojo program imports, by name.
+
+    `modular.cfg` names the first as `compilerrt_path` and the other three as
+    `shared_libs`; this list is that list.
+    """
+    var names = List[String]()
+    names.append(String("KGENCompilerRTShared.dll"))
+    names.append(String("AsyncRTRuntimeGlobals.dll"))
+    names.append(String("MSupportGlobals.dll"))
+    names.append(String("nvptxrt.dll"))
+    return names^
+
+
+def stage_runtime_beside(output: String) raises -> Int:
+    """Copy the runtime DLLs into the directory a program is being built into.
+
+    WITHOUT THIS, A BUILT PROGRAM ONLY RUNS INSIDE THE EDITOR. `ensure_linker`
+    puts the toolchain's `bin` and `lib` on the PATH of children Griddle
+    spawns, so Run works -- and that is exactly what hides the problem. Double
+    click the executable that was just built, or hand it to somebody, or run
+    it from a shell, and Windows cannot resolve KGENCompilerRTShared.dll and
+    puts up "The code execution cannot proceed because KGENCompilerRTShared.dll
+    was not found. Reinstalling the program may fix this problem."
+
+    Which is a lie, in the specific sense that reinstalling does not fix it:
+    the DLL is installed, it is simply nowhere Windows looks. The loader
+    searches the executable's own directory and PATH, and a program built into
+    somebody's project folder has neither.
+
+    So the four DLLs go next to the output. The release already does this for
+    the examples it ships -- the DLLs beside `hello.exe` in the examples
+    directory are these four -- and every example one level down, under
+    win32, was missing them, which is the same bug in a subdirectory.
+
+    Overwritten rather than skipped when present: three megabytes of copying
+    is not worth a stale runtime surviving a toolchain upgrade.
+
+    Args:
+        output: The executable being built. Its directory is used.
+
+    Returns:
+        How many were staged.
+
+    Raises:
+        If a Win32 entry point cannot be resolved.
+    """
+    var cut = output.rfind(chr(0x5C))
+    if cut < 0:
+        return 0
+    var into = String(output[byte=:cut])
+    if into.byte_length() == 0:
+        return 0
+
+    var CopyFileW = win32[
+        def (
+            Pointer[UInt16, MutAnyOrigin],
+            Pointer[UInt16, MutAnyOrigin],
+            c_int,
+        ) thin abi("C") -> c_int,
+        "CopyFileW",
+    ]()
+
+    var dirs = runtime_dirs()
+    var staged = 0
+    for name in program_runtime():
+        for folder in dirs:
+            var from_path = utf16z(folder + chr(0x5C) + name)
+            var to_path = utf16z(into + chr(0x5C) + name)
+            var ok = CopyFileW(
+                from_path.unsafe_ptr().unsafe_origin_cast[MutAnyOrigin](),
+                to_path.unsafe_ptr().unsafe_origin_cast[MutAnyOrigin](),
+                c_int(0),
+            )
+            _ = from_path
+            _ = to_path
+            if ok != 0:
+                staged += 1
+                break
+    return staged
+
+
 def ensure_linker() raises -> String:
     """Put the toolchain Griddle trusts at the front of the child's PATH.
 
@@ -252,29 +372,7 @@ def ensure_linker() raises -> String:
     # every frame has no variables in it, which looks like a broken debugger.
     # tools/check-debugger.ps1 has staged these since sprint 0.0; this is the
     # same list, for the children Griddle spawns itself.
-    var runtime = List[String]()
-    if layout_name() == "installed":
-        # An installed release keeps every runtime DLL a program imports --
-        # KGENCompilerRTShared, AsyncRTRuntimeGlobals, MSupportGlobals and
-        # nvptxrt -- in lib, with copies in bin so griddle.exe itself loads
-        # when launched directly. The launchers put both on PATH; an editor
-        # started from its Start-menu shortcut is not a launcher and got
-        # neither, so a program it built could not load the runtime it was
-        # linked against. Nothing in the list below exists there.
-        var root = toolchain_root()
-        runtime.append(root + chr(0x5C) + "bin")
-        runtime.append(root + chr(0x5C) + "lib")
-    else:
-        runtime.append(absolute("bazel-bin/KGEN"))
-        runtime.append(absolute("bazel-bin/AsyncRT"))
-        runtime.append(absolute("bazel-bin/Support"))
-        # And the NVIDIA device runtime, a DLL since it stopped being linked
-        # into every GPU program as a static archive. A program built from
-        # the editor imports it by name and finds it here.
-        runtime.append(absolute("bazel-bin/nvptx/runtime"))
-        runtime.append(
-            absolute("bazel-bin/external/+llvm_configure+llvm-project/lldb")
-        )
+    var runtime = runtime_dirs()
 
     # Each directory is checked for on its own. Using the linker's directory
     # as a sentinel for "already staged" was wrong in the one case that

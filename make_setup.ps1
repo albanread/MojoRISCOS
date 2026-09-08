@@ -22,12 +22,22 @@
 # afternoon. Both install in about twenty seconds; the difference is only
 # what you wait for at this end.
 #
-# THE GATE. check-packaged.ps1 runs before anything is compressed, and a
-# failure stops the build. It exists because a release once shipped in which
-# not one example compiled: every sweep in this tree builds against the
-# stdlib as SOURCE, a release ships it as a PACKAGE, and the two do not
-# resolve the same names. Nothing gets wrapped here until it has been built
-# the way the person who installs it will build it.
+# TWO GATES, and they ask different questions.
+#
+# BEFORE COMPRESSION, check-packaged.ps1: does every example COMPILE against
+# the packaged standard library? It exists because a release once shipped in
+# which not one example compiled -- every sweep in this tree builds against
+# the stdlib as SOURCE, a release ships it as a PACKAGE, and the two do not
+# resolve the same names.
+#
+# AFTER WRAPPING, check-release.ps1: install the setup that was just made,
+# and make the installed copy BUILD AND RUN things -- Mojo, a windowed
+# program, a GPU program, a Python project with requirements, Mojo calling
+# Python, and a tree that has been moved. It exists because compiling is not
+# running, and a release went out in which everything compiled and nothing
+# started. Proving the release was a line of advice printed at the end here,
+# which is the same as not proving it. It is a step now, and a failure means
+# the setup is not fit to publish.
 [CmdletBinding()]
 param(
     # Solid LZMA rather than zlib: about half the size, about fifteen times
@@ -41,6 +51,9 @@ param(
     # Package without proving the examples first. For when you are testing
     # the installer itself and know the tree is good.
     [switch]$SkipCheck,
+    # Wrap the setup but do not install it and put it through its paces.
+    # Every use of this ships something nobody ran.
+    [switch]$SkipProve,
     # Where the staged tree and the finished setup are written.
     [string]$OutDir = 'F:\winmojo-release'
 )
@@ -191,12 +204,40 @@ $hash = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvaria
     "$hash  $([System.IO.Path]::GetFileName($setup))`r`n",
     [System.Text.UTF8Encoding]::new($false))
 
+# ---- 6. prove it ----------------------------------------------------------
+# Install what was just wrapped, into a directory that is not the staging one,
+# and make it work: build a program and run it and read what it printed, run a
+# windowed program and a GPU program, set up a Python project from its
+# requirements.txt and run it, have Mojo call CPython, and do it all again from
+# a copy of the tree that has MOVED.
+#
+# This used to be a sentence of advice at the bottom of a successful build.
+# Advice is not a gate. The setup stays on disk when it fails so it can be
+# taken apart, but it is reported as unfit rather than as finished.
+$proved = $true
+if ($SkipProve) {
+    Write-Warning 'skipping check-release: this setup has NOT been installed or run'
+} else {
+    Say 'installing the setup and making it work'
+    & (Join-Path $repo 'tools\check-release.ps1') -Setup $setup
+    if ($LASTEXITCODE -ne 0) { $proved = $false }
+}
+
 $took = [int]((Get-Date) - $started).TotalSeconds
 Write-Host ''
-Write-Host "  setup     $setup" -ForegroundColor Green
+$colour = 'Green'
+if (-not $proved) { $colour = 'Red' }
+Write-Host "  setup     $setup" -ForegroundColor $colour
 Write-Host ('  size      {0:N1} MiB' -f ((Get-Item $setup).Length / 1MB))
 Write-Host "  version   $version"
 Write-Host "  sha256    $hash"
 Write-Host "  took      $([int]($took / 60))m $($took % 60)s"
 Write-Host ''
-Write-Host "  prove it:  .\tools\check-install.ps1 -Setup `"$setup`""
+if (-not $proved) {
+    Write-Host '  NOT FIT TO PUBLISH -- the installed copy failed check-release.ps1.' -ForegroundColor Red
+    Write-Host '  The setup is still on disk so it can be taken apart:' -ForegroundColor Red
+    Write-Host "    .\tools\check-release.ps1 -Setup `"$setup`" -KeepInstall"
+    exit 1
+}
+Write-Host '  installed, built, ran, and passed check-release.ps1.' -ForegroundColor Green
+Write-Host "  wider install check:  .\tools\check-install.ps1 -Setup `"$setup`""

@@ -224,6 +224,7 @@ from ide.build import (
     stop as stop_build,
     what_ran,
     start_chain,
+    stage_runtime_beside,
 )
 from ide.dap import (
     configuration_done,
@@ -2760,6 +2761,21 @@ def build_file(hwnd: Int) raises -> String:
         out = stem^
     out += ".exe"
     var tools = _toolchain()
+    # The runtime, next to what is about to be built. Griddle puts the
+    # toolchain on the PATH of everything it spawns, so a program it runs
+    # itself always loads -- and that is what hid this: the executable was
+    # only ever started by the one process that could find its DLLs. Started
+    # any other way, Windows says KGENCompilerRTShared.dll was not found and
+    # suggests reinstalling, which does not help because the DLL is installed
+    # and simply is not anywhere the loader looks.
+    #
+    # Before the build rather than after it: nothing here depends on the
+    # build succeeding, and doing it first means a program is runnable the
+    # instant it exists rather than one poll later.
+    try:
+        _ = stage_runtime_beside(out)
+    except:
+        pass
     return start_build(
         '"' + tools[0] + '" build --no-optimization'
         + _stdlib_flag(tools[1]) + ' -I .' + _extra_flags(jit=False)
@@ -3809,6 +3825,14 @@ def debug_file(hwnd: Int) raises -> String:
         stem = cut^
     var out = stem + ".debug.exe"
     var tools = _toolchain()
+    # The same for the debug build. The debugger launches the executable
+    # through lldb-dap, which is a different process with a different
+    # environment, and a debuggee that cannot load is reported as a debugger
+    # fault rather than a missing DLL.
+    try:
+        _ = stage_runtime_beside(out)
+    except:
+        pass
     # Symbols, always. Debug means --debug-level full and never anything else;
     # handing a debugger an optimized binary is how an afternoon disappears
     # into locals that are simply absent.
