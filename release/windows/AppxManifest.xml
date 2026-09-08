@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WinMojo as an MSIX package.
+
+  This is possible only because the tree never writes into itself: the
+  compiler finds its package from its own executable, modular.cfg uses @ROOT@
+  and is never rewritten, and the cache and crash database go to
+  %LOCALAPPDATA%\WinMojo. Under MSIX the install directory is read-only, and
+  check-release.ps1 proves the tree works that way before any package is made.
+
+  A full-trust desktop package (the "Desktop Bridge" shape): the executables
+  run as ordinary Win32 processes with the user's rights, not in a UWP sandbox.
+  That is what a compiler, a linker and a debugger need, and it is permitted
+  in the Store for desktop apps.
+
+  IDENTITY. The Name, Publisher and Version below are PLACEHOLDERS for local
+  testing. The Store assigns the real Name and Publisher when the app is
+  reserved in Partner Center, and pack-msix.ps1 substitutes them. A sideloaded
+  test package must be signed with a certificate whose subject equals the
+  Publisher string exactly, which is why the placeholder is a CN and nothing
+  more.
+
+  ALIASES. AppExecutionAlias puts `mojo` and `griddle` on PATH for the user
+  without touching the PATH variable — the packaged replacement for the
+  launchers. `mojo.cmd` and friends still ship and still work; they are simply
+  not needed.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap3 desktop rescap">
+
+  <Identity
+    Name="@IDENTITY_NAME@"
+    Publisher="@PUBLISHER@"
+    Version="@VERSION@"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>WinMojo</DisplayName>
+    <PublisherDisplayName>Alban Read</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <Description>Mojo for Windows x64 with NVIDIA GPU support, and Griddle, an IDE written in Mojo.</Description>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-GB" />
+  </Resources>
+
+  <!--
+    Two Applications, not one. An execution alias launches the executable of
+    the Application it belongs to, and a package may declare the alias
+    extension only once per Application (makeappx: "must only be declared
+    once"). So `griddle` belongs to the IDE and `mojo` to a second, console
+    Application that is hidden from the Start menu with AppListEntry="none".
+  -->
+  <Applications>
+    <Application Id="Griddle" Executable="bin\griddle.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="Griddle"
+        Description="The WinMojo IDE"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+      <Extensions>
+        <!-- `griddle` on the user's PATH, the packaged way. -->
+        <uap3:Extension Category="windows.appExecutionAlias" Executable="bin\griddle.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap3:AppExecutionAlias>
+            <desktop:ExecutionAlias Alias="griddle.exe" />
+          </uap3:AppExecutionAlias>
+        </uap3:Extension>
+        <!-- Double-clicking a .mojo file opens it in Griddle. -->
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="mojo">
+            <uap:SupportedFileTypes>
+              <uap:FileType>.mojo</uap:FileType>
+            </uap:SupportedFileTypes>
+            <uap:DisplayName>Mojo source</uap:DisplayName>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+      </Extensions>
+    </Application>
+
+    <Application Id="Mojo" Executable="bin\mojo.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="Mojo compiler"
+        Description="The Mojo compiler, for the command line"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png"
+        AppListEntry="none" />
+      <Extensions>
+        <!-- `mojo` on the user's PATH. -->
+        <uap3:Extension Category="windows.appExecutionAlias" Executable="bin\mojo.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap3:AppExecutionAlias>
+            <desktop:ExecutionAlias Alias="mojo.exe" />
+          </uap3:AppExecutionAlias>
+        </uap3:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>
