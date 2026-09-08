@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 """The shape of a file, from the language server: its outline, flattened.
 
 Griddle could already jump to a definition and could not tell you what was in

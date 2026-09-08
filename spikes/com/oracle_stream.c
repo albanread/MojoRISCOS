@@ -1,3 +1,7 @@
+// Copyright (c) 2026, Alban Read.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 /* The foreign-compiler ABI oracle: a COM object MSVC built, for Mojo to call.
  *
  * Implements ISequentialStream (slots 0-4: IUnknown's three, then Read and

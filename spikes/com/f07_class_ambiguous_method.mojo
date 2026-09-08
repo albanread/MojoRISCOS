@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # MUST FAIL: IStream derives from ISequentialStream, so a class implementing
 # both has two interfaces that each declare Read and Write. Binding those to
 # whichever interface happens to be listed first would fill a slot on one

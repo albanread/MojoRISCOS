@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # Reading a whole file: headers, then music, with fields allowed in both.
 #
 # ABC's header ends at the K: field, which is the one rule that makes the

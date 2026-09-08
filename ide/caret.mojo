@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 """Where the caret goes, and which character a click landed on.
 
 Sprint 1.3. A monospaced grid tempts you to answer both questions with

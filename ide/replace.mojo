@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 """Replacing text: one at a time, or all of them at once.
 
 Griddle could find text and could not change it, which made the find bar a

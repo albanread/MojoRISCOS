@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # The C3 milestone: a COM object Mojo IMPLEMENTS, registered with Windows.
 #
 # IDropTarget is the drag-and-drop sink Explorer calls into when files are

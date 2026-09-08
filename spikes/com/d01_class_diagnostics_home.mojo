@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # A mistake inside a class body reports the user's own file and line.
 #
 # This is a spike that must FAIL to compile, and it is here in the must-pass

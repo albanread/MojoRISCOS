@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # The cl.exe oracle, consumed: MSVC built the object, Mojo calls it typed.
 #
 # The metadata says what and where; only a foreign compiler can confirm how

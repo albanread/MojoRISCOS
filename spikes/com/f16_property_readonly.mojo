@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # MUST FAIL: a read-only property. IAudioClock declares GetFrequency and no
 # SetFrequency, so `view.frequency = ...` has no setter to mean -- the
 # metadata refuses the write at compile time, naming the interface and the

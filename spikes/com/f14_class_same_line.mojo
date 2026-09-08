@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # MUST FAIL: a class body on the header's own line. The body capture walks
 # back from the first body token to the start of its line, and a same-line
 # token's line IS the header's line -- so the captured text began with

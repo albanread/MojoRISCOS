@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # Lexer tests. The colouring runs on the draw path and its output is turned
 # straight into DirectWrite ranges, so a wrong offset here is a wrong colour on
 # screen -- and a screenshot is a slow, coarse way to find out which byte the

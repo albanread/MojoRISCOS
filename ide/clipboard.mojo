@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 """The Windows clipboard, in the two shapes an editor actually needs.
 
 Griddle had no cut, no copy and no paste, which is a strange thing for a text

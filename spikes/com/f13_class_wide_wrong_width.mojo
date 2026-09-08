@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # MUST FAIL: the width check still applies past the old four-argument ceiling.
 #
 # `starting_line` is a 4-byte u32; this declares a 1-byte UInt8. Five new

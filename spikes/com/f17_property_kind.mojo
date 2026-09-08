@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # MUST FAIL: a float where the SDK declares an integer. SetOptions takes a
 # u32, and a Float32 is four bytes too -- the width check alone would pass
 # it, and the callee would read reinterpreted bits. The kind check in the

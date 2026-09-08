@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 """Does this Mojo language server answer `textDocument/documentSymbol`?
 
 A spike, not a test and not part of the editor. The question is about the

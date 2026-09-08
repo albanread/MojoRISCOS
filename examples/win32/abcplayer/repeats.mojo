@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # Repeats, expanded properly -- including first and second endings.
 #
 # `|: A |1 B :|2 C |` plays A B A C. That is the whole point of the notation

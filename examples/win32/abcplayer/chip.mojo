@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # --- vendored from the Mac port's examples/abcplayer/chip.mojo ---
 # abcplayer reuses the chip synthesiser's DSP engine. An IDE example is a
 # folder that opens and runs with no include flags, so the synth lives here as

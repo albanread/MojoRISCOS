@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # A window, cleared and presented through Direct3D 11, from Mojo on Windows
 # ARM64. The smallest of the Win32 examples: one window, one swap chain, one
 # colour a frame.

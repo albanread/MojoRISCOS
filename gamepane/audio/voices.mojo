@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 """A voice bank over the chip: notes in, registers out.
 
 The chip speaks in frequency registers and gate bits. A game speaks in

@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 """The agent surface: one dispatcher, text in, text out.
 
 Griddle is drivable from outside from its second sprint, before it can edit

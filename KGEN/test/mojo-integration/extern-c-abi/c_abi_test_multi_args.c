@@ -1,3 +1,7 @@
+// Copyright (c) 2026, Alban Read.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 // C reference for cross-argument register allocation.
 // Mojo test: test_struct_arguments_multi.mojo
 //

@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # MUST FAIL: a typo'd property name. There is no SetOptons on IACList2, and
 # the metadata's refusal is the diagnostic: the compiler names the interface
 # and the property rather than dropping the write or inventing a runtime

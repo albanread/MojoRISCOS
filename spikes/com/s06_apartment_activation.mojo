@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # An apartment held for a scope, and a real coclass activated inside it.
 #
 # `with Apartment():` is CoInitializeEx/CoUninitialize balanced by the scope,

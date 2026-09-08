@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # GalaxigansDeluxe -- the four melodic cues, transcribed note for note from
 # the assembler original's galaxigans_music.was by way of MACVM's port. The
 # %%MIDI program lines are General MIDI numbers: 80 square lead, 52 choir,

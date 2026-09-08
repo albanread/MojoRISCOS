@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # Tests for the rope. Values are asserted, not printed and eyeballed -- these
 # pin the behaviour so the path-copying rewrite of `replace` can land without
 # changing a line of them.

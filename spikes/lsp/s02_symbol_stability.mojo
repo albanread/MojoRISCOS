@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 """Does the same `documentSymbol` request give the same answer every time?
 
 Griddle got 61, 61 and 4 symbols from three identical runs against the same

@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # JSON, because the language server speaks it.
 #
 # IDE-DESIGN.md lists std.json as a stdlib gap; this is that gap, filled to the

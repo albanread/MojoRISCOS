@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # The property write: `view.options = 2` means SetOptions(2).
 #
 # The write-shaped sibling of the typed call surface. The name arrives at

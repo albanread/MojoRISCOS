@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 """The IDE's Win32 layer: every call typed, every number from the metadata.
 
 The standing rule for Griddle is that nothing here is hand-declared. A

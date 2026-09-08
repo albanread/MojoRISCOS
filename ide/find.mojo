@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 """Finding text, without ever making a copy of it.
 
 Sprint 1.6. The whole of this file is bookkeeping around three rope methods

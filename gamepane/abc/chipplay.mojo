@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # Playing a schedule through the chip, sample by sample.
 #
 # The chip in examples/chip/ is a synthesiser with three voices and no idea

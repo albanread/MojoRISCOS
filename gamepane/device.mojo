@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 """Direct3D 11 creation and dispatch, in the spellings this tree has
 already proven, plus the game pane's bridge to `max.gpu`.
 

@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 """General MIDI playback of an ABC tune through the Windows GS synth.
 
 The Mac backend's answer to "a choir, not a chip" is AVMIDIPlayer with the

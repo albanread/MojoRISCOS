@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 """A child process on the other end of two pipes.
 
 The Windows half of what MojoCocoa's `ide/lsp.mojo` gets from NSTask and

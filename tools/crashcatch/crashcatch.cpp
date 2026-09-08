@@ -1,3 +1,7 @@
+// Copyright (c) 2026, Alban Read.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 //===----------------------------------------------------------------------===//
 // crashcatch — a minimal Win32 debugger that turns a silent crash into a
 // stack trace and a minidump.

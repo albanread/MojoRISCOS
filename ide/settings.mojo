@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 """Preferences: the handful of answers Griddle should stop asking for.
 
 Sprint 7.1 wants one verb, `setting <key> [value]`: a key alone reads, a key

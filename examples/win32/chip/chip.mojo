@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # ===----------------------------------------------------------------------=== #
 # A 6581-flavoured synthesiser: three voices, ADSR, a resonant filter.
 #

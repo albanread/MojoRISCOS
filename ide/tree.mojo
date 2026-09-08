@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 """The project tree in the sidebar: what is on disk, expanded as you ask.
 
 Milestone 5. Until now the only way to a second file was Ctrl+O and knowing

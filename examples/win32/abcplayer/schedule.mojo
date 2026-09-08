@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # Turning a tune into a list of things to do at exact sample times.
 #
 # This is where the timing claim is either true or not. A tick is an exact

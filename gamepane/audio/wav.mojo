@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 """Canonical 16-bit PCM WAV out, 8/16/24/32-bit in.
 
 Here for one reason: the chip is integer arithmetic with a fixed LFSR seed,

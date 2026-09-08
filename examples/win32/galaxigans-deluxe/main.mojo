@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # GalaxigansDeluxe -- a Galaxian/Galaga-style fixed shooter: the complete port
 # of MACVM's Galaxigans (world/49_galaxigans.mst, itself a faithful port of the
 # x64 assembler original) onto the Mojo game pane.

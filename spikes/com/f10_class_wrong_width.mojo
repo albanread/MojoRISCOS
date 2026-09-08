@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # MUST FAIL: grfKeyState is a 4-byte u32; this one declares a 1-byte UInt8.
 # The recorded disaster class -- a narrow value where the vtable slot expects
 # a wide one reads the wrong register bytes, and the method sees garbage key

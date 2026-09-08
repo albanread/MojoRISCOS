@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # MUST FAIL: Seek's first parameter is an i64; feeding 4 bytes where the ABI
 # passes 8 is the class of silent corruption the width check exists to stop.
 from std.memory import Pointer

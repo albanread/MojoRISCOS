@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # JSON tests. The language server is on the other end of this, so the cases
 # that matter are the ones a real server sends: nested objects, arrays of
 # objects, escapes, non-ASCII, and numbers that must not grow a decimal point.

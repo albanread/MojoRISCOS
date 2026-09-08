@@ -1,3 +1,7 @@
+// Copyright (c) 2026, Alban Read.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 // C ABI integer struct tests
 // Mojo tests: test_struct_argument_{1,2,4,8,9,12,16,17,int_31,33}byte.mojo
 // Tests integer-only struct classification and register passing

@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 """Everything `std.windows.audio` offers, in one program that makes a noise.
 
 An endpoint, a mix format, a ring, an event, a fill on the deadline and the

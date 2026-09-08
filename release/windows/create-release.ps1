@@ -288,9 +288,55 @@ if (Test-Path -LiteralPath $guideSource -PathType Container) {
     Copy-Item -LiteralPath $guideSource -Destination $guideTarget -Recurse -Force
 }
 
-$licenseDirectory = Join-Path $repository 'Licenses'
-if (Test-Path -LiteralPath $licenseDirectory -PathType Container) {
-    Copy-Item -LiteralPath $licenseDirectory -Destination $destinationPath -Recurse -Force
+# THE LICENCES THIS PACKAGE ACTUALLY NEEDS, rather than the repository's whole
+# Licenses directory.
+#
+# That directory is upstream's, and copying it wholesale put two documents on
+# every user's disk that do not describe this product:
+#
+#   Licenses\LICENSE          the Modular Community License -- terms for
+#                             DOWNLOADING Modular's SDK, which this package
+#                             neither is nor contains. The copy in the tree is
+#                             the 17 August 2026 text, including the clause
+#                             against developing "an Application in Mojo, for
+#                             any Competitive Activity". Shipping it inside an
+#                             Apache-2.0 fork of that very project is at best
+#                             confusing and at worst actively misleading about
+#                             what the recipient is allowed to do.
+#
+#   Licenses\Third-Party-Notices
+#                             upstream's cross-product notices, carrying the
+#                             full LICENSE AGREEMENT FOR NVIDIA SOFTWARE
+#                             DEVELOPMENT KITS for NVSHMEM -- a component that
+#                             is not in this package. lib\nvptxrt.dll imports
+#                             nvcuda.dll from the user's display driver; no
+#                             NVIDIA code is redistributed here at all.
+#
+# It happened because `File /r` in installer.nsi ships whatever is staged, and
+# staging copied a directory rather than choosing files. So the choice is made
+# here, explicitly, and the guard below fails the release if the Modular
+# Community License finds its way back into the payload.
+$licenseTarget = Join-Path $destinationPath 'Licenses'
+if (Test-Path -LiteralPath $licenseTarget) {
+    Remove-Item -LiteralPath $licenseTarget -Recurse -Force
+}
+New-Item -ItemType Directory -Path $licenseTarget -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'THIRD-PARTY-NOTICES') `
+    -Destination (Join-Path $licenseTarget 'Third-Party-Notices') -Force
+
+# The Apache text itself already ships at the root as LICENSE, and a second
+# copy here keeps `Licenses` self-explanatory for anyone who opens it first.
+Copy-Item -LiteralPath (Join-Path $repository 'LICENSE') `
+    -Destination (Join-Path $licenseTarget 'LICENSE') -Force
+
+# A payload that says it is Apache-licensed must not also contain a licence
+# that says otherwise. Cheap, and it is the check that would have caught this
+# the first time.
+$stray = Get-ChildItem -LiteralPath $licenseTarget -Recurse -File |
+    Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -match 'Modular Community License' }
+if ($stray) {
+    throw ("the payload carries the Modular Community License: " +
+        (($stray | ForEach-Object { $_.FullName }) -join ', '))
 }
 
 $config = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'modular.cfg.in') -Raw).Replace('@RELEASE_ROOT@', $destinationPath)

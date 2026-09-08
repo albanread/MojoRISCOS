@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # Talks to the real mojo-lsp-server: spawn it, initialize, open a file with a
 # deliberate error in it, and read the diagnostics back.
 #

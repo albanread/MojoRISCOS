@@ -1,3 +1,7 @@
+// Copyright (c) 2026, Alban Read.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+// See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 // C ABI reference implementation for FLOAT struct tests
 // Mojo tests: test_struct_argument_float_*.mojo,
 // test_struct_argument_double_*.mojo, test_struct_argument_mixed_*.mojo These

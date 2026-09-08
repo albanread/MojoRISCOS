@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # The music-line parser: the half of ABC that is not headers.
 #
 # This is the part with the sharp edges. The notation is terse, ambiguous in

@@ -1,3 +1,7 @@
+# Copyright (c) 2026, Alban Read.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+# See LICENSE in the root of this repository, or https://llvm.org/LICENSE.txt
+
 # MUST FAIL: the IUnknown slots belong to the library; a class may not
 # supply its own AddRef. The builder rejects it at compile time.
 from std.sys.com import ComClassBuilder
