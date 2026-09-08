@@ -143,7 +143,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $currentLink 'bin\mojo.exe'))) {
 # is in modular.cfg. Griddle does the same thing for itself at startup; doing
 # it here as well means the very first command works even if that command is
 # mojo.exe rather than the editor.
-& cmd /c "call `"$target\paths.cmd`"" | Out-Null
+# Nothing to repoint: the toolchain finds its package from its own executable.
 
 if ($staging) { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue }
 

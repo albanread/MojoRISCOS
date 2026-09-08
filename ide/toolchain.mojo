@@ -1068,42 +1068,33 @@ def toolchain_report() raises -> String:
 
 
 def adopt_installed_toolchain() raises -> String:
-    """Point this installation's configuration and environment at itself.
+    """Put the installed toolchain's `bin` and `lib` on PATH, and nothing else.
 
-    Every path in a release's `modular.cfg` is absolute and was written for
-    the directory the release was packaged in. `paths.cmd` rewrites them, and
-    every launcher in the package calls it -- but nobody pins a batch file to
-    their taskbar. Launched as `bin\\griddle.exe`, the editor spawned a compiler
-    that went looking for a directory on the packaging machine, and every
-    build failed with "unable to locate module 'std'", which reads like a
-    broken installation rather than a moved one.
+    THIS USED TO REWRITE `modular.cfg` AND SET `MODULAR_HOME`, and it must do
+    neither. The compiler finds its package from its own executable now and
+    expands `@ROOT@` in the configuration it finds there, so the file is right
+    wherever the tree is; rewriting it would be pointless, and IMPOSSIBLE under
+    MSIX, where the tree is read-only. And `MODULAR_HOME` set to the package
+    would drag the compiler's cache and crash database back into that
+    read-only tree -- the one thing the whole design exists to avoid. They
+    belong in `%LOCALAPPDATA%\\WinMojo`, which is where the compiler puts them
+    when nothing tells it otherwise.
 
-    So the editor does it too, from the root its own lookup found. Three
-    things, all of them things a launcher would otherwise have had to do:
-    the configuration is rewritten if this copy has moved, `MODULAR_HOME` is
-    set so a child compiler finds that configuration at all, and `bin` and
-    `lib` go on PATH so a built program finds the runtime DLLs beside it.
-
-    Does nothing for a source tree, which has no `modular.cfg` and needs none.
+    What remains is PATH: `bin` for the compiler and `lib` for the runtime
+    DLLs, so a program the editor builds and runs finds them. Does nothing
+    for a source tree.
 
     Returns:
-        What it did, for the startup log, or why there was nothing to do.
+        Empty. Kept as a String for the callers that log what it said.
 
     Raises:
-        Never in practice; a failure to write is reported, not raised.
+        Never in practice.
     """
     if layout_name() != "installed":
         return String("")
     var root = toolchain_root()
     if root == "":
         return String("")
-
-    # The environment first: it costs nothing and is right even when the
-    # configuration is already current.
-    try:
-        set_env(String("MODULAR_HOME"), root)
-    except:
-        pass
     try:
         var path = String(env_or("PATH", ""))
         var bin = _under(root, "bin")
@@ -1111,24 +1102,7 @@ def adopt_installed_toolchain() raises -> String:
         set_env(String("PATH"), bin + ";" + lib + ";" + path)
     except:
         pass
-
-    var stamp = _under(root, "modular.cfg.root")
-    var recorded = _read_text(stamp)
-    if _same_path(recorded, root):
-        return String("")
-
-    var template = _read_text(_under(root, "modular.cfg.in"))
-    if template == "":
-        # No template, so nothing can be rewritten. Said rather than silently
-        # skipped: a package missing its template is one that cannot be moved,
-        # and somebody should find that out here rather than from a build.
-        return String("this installation has no modular.cfg.in; it cannot be moved")
-
-    var written = _replaced(template, String("@RELEASE_ROOT@"), root)
-    if not _write_text(_under(root, "modular.cfg"), written):
-        return String("could not rewrite modular.cfg in ") + root
-    _ = _write_text(stamp, root)
-    return String("pointed the toolchain at ") + root
+    return String("")
 
 
 def _read_text(path: String) -> String:

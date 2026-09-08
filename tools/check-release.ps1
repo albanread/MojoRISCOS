@@ -137,7 +137,7 @@ function Griddle {
     )
     if ($Ms -le 0) { $Ms = $TimeoutMs }
     $exe = Join-Path $script:Root 'bin\griddle.exe'
-    return Invoke-Timed -Exe $exe -ArgLine ('--no-lsp --cmd "' + $Commands + '"') -Cwd $Cwd -Ms $Ms -SetEnv $SetEnv
+    return Invoke-Timed -Exe $exe -ArgLine ('--no-lsp --cmd "' + $Commands + '"') -Cwd $Cwd -Ms $Ms -SetEnv $SetEnv -ClearEnv $script:scrubForChildren
 }
 
 Write-Host "== release check =="
@@ -168,34 +168,35 @@ New-Item -ItemType Directory -Force -Path $work | Out-Null
 $cfgPath = Join-Path $Root 'modular.cfg'
 if (Test-Path $cfgPath) {
     $cfg = Get-Content $cfgPath -Raw
-    $declared = @{}
-    foreach ($line in ($cfg -split "`r?`n")) {
-        if ($line -match '^\s*([a-z_]+)\s*=\s*(.+?)\s*$') { $declared[$matches[1]] = $matches[2] }
+    # Comments stripped before anything is matched: the file explains @ROOT@
+    # in its own comment, and a check that read that sentence as a path failed
+    # a correct release.
+    $cfgCode = (($cfg -split "`r?`n") | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    # NEVER REWRITTEN. The file the release ships is the file on disk, and it
+    # names no drive: the compiler finds this tree from its own executable and
+    # expands @ROOT@. A drive letter here means somebody put the rewriting
+    # back, and the tree would work only where it was packaged.
+    $absolute = [regex]::Matches($cfgCode, '([A-Za-z]:\\[^,\r\n]*)') | ForEach-Object { $_.Groups[1].Value }
+    Record 'cfg-never-rewritten' ($absolute.Count -eq 0) $(
+        if ($absolute.Count -eq 0) { 'modular.cfg names no absolute path' } else { 'names ' + ($absolute -join ', ') })
+    foreach ($stale in 'modular.cfg.in', 'modular.cfg.root', 'paths.cmd') {
+        if (Test-Path (Join-Path $Root $stale)) { Record 'cfg-never-rewritten' $false "$stale is still in the tree" }
     }
-    $rootNamed = ''
-    if ($declared.ContainsKey('package_root')) { $rootNamed = $declared['package_root'] }
-    $sameRoot = ($rootNamed.TrimEnd('\') -ieq $Root.TrimEnd('\'))
-    Record 'cfg-names-this-tree' $sameRoot "package_root = $rootNamed"
 
+    # Everything @ROOT@ points at, and everything the compiler defaults to
+    # when a key is omitted, is really there.
     $missing = @()
-    foreach ($k in @('driver_path', 'compilerrt_path', 'winkb_path', 'lld_path', 'linker_driver', 'import_path')) {
-        if ($declared.ContainsKey($k)) {
-            if (-not (Test-Path $declared[$k])) { $missing += ("$k -> " + $declared[$k]) }
-        }
+    foreach ($m in [regex]::Matches($cfgCode, '@ROOT@([^,\r\n]*)')) {
+        $p = Join-Path $Root $m.Groups[1].Value.Trim()
+        if (-not (Test-Path $p)) { $missing += $p }
     }
-    if ($declared.ContainsKey('shared_libs')) {
-        foreach ($lib in ($declared['shared_libs'] -split ',')) {
-            if ($lib.Trim() -ne '' -and -not (Test-Path $lib.Trim())) { $missing += ("shared_libs -> " + $lib.Trim()) }
-        }
+    foreach ($rel in 'bin\mojo.exe', 'lib\std.mojoc', 'lib\windows_api.db', 'lib\KGENCompilerRTShared.dll', 'bin\lld.exe', 'bin\mojo-lldb.exe', 'lib\MojoLLDB.dll') {
+        if (-not (Test-Path (Join-Path $Root $rel))) { $missing += "(default) $rel" }
     }
-    Record 'cfg-paths-exist' ($missing.Count -eq 0) $(if ($missing.Count -eq 0) { 'every path in modular.cfg is on disk' } else { ($missing -join '; ') })
-
-    $ip = ''
-    if ($declared.ContainsKey('import_path')) { $ip = $declared['import_path'] }
-    $hasStd = ($ip -ne '') -and (Test-Path (Join-Path $ip 'std.mojoc'))
-    Record 'stdlib-reachable' $hasStd "import_path = $ip"
+    Record 'cfg-paths-exist' ($missing.Count -eq 0) $(if ($missing.Count -eq 0) { 'every @ROOT@ path and every compiler default is on disk' } else { ($missing -join '; ') })
+    Record 'stdlib-reachable' (Test-Path (Join-Path $Root 'lib\std.mojoc')) 'lib\std.mojoc'
 } else {
-    Record 'cfg-names-this-tree' $false 'no modular.cfg at the root'
+    Record 'cfg-never-rewritten' $false 'no modular.cfg at the root'
 }
 
 # ---- 2. the compiler alone, with no help from anything ----------------------
@@ -222,19 +223,11 @@ if (Test-Path $cfgPath) {
 # installation contains. That is precisely the sort of pass this whole file
 # exists to stop, and it happened on the first gated build.
 $scrub = @('MODULAR_HOME', 'MODULAR_MOJO_MAX_WINKB_PATH', 'MOJO_PYTHON', 'MOJO_PYTHON_LIBRARY', 'GRIDDLE_PYTHON_HOME')
+$script:scrubForChildren = $scrub
 
-# Read from the registry rather than from this process: this process may have
-# been started before the install, and an installer's environment change only
-# reaches shells opened afterwards.
-$registeredHome = ''
-try {
-    $registeredHome = (Get-ItemProperty 'HKCU:\Environment' -Name MODULAR_HOME -ErrorAction Stop).MODULAR_HOME
-} catch { }
-$homeOk = ($registeredHome -ne '') -and ($registeredHome.TrimEnd('\') -ieq $Root.TrimEnd('\'))
-Record 'modular-home-registered' $homeOk $(
-    if ($registeredHome -eq '') { 'nothing sets MODULAR_HOME, so `mojo` outside a launcher cannot find std' }
-    elseif (-not $homeOk) { "MODULAR_HOME names $registeredHome, not this tree" }
-    else { "MODULAR_HOME = $registeredHome" })
+# No MODULAR_HOME, from anywhere. The compiler finds its package from its own
+# executable; an installation that needed the variable would be one that only
+# works from a launcher, which is the bug this replaced.
 $helloDir = Join-Path $work 'hello'
 New-Item -ItemType Directory -Force -Path $helloDir | Out-Null
 Set-Content -Path "$helloDir\main.mojo" -Encoding ascii -Value @(
@@ -244,13 +237,10 @@ Set-Content -Path "$helloDir\main.mojo" -Encoding ascii -Value @(
     '        total += i * i',
     '    print("MOJO-OK", total)'
 )
-$shellEnv = @{}
-if ($registeredHome -ne '') { $shellEnv['MODULAR_HOME'] = $registeredHome }
-$r = Invoke-Timed -Exe (Join-Path $Root 'bin\mojo.exe') -ArgLine ('run --no-optimization "' + $helloDir + '\main.mojo"') -Cwd $helloDir -Ms 180000 -ClearEnv $scrub -SetEnv $shellEnv
+$r = Invoke-Timed -Exe (Join-Path $Root 'bin\mojo.exe') -ArgLine ('run --no-optimization "' + $helloDir + '\main.mojo"') -Cwd $helloDir -Ms 180000 -ClearEnv $scrub
 $sawStd = ($r.Output -match "locate module|unable to find.*std|'std'")
 Record 'compiler-alone-runs' ($r.Output -match 'MOJO-OK 285') $(
-    if ($sawStd -and $registeredHome -eq '') { 'no MODULAR_HOME anywhere, so the compiler cannot find std' }
-    elseif ($sawStd) { 'the compiler cannot find std even with MODULAR_HOME set' }
+    if ($sawStd) { 'the compiler cannot find std from its own location' }
     elseif ($r.TimedOut) { 'timed out' }
     else { "printed what it computed (exit $($r.ExitCode))" })
 if (-not ($r.Output -match 'MOJO-OK 285')) { Show-Tail 'mojo run' $r.Output 12 }
@@ -505,13 +495,18 @@ if (-not $Quick) {
         New-Item -ItemType Directory -Force -Path $movedProj | Out-Null
         Copy-Item "$helloDir\main.mojo" "$movedProj\main.mojo"
 
-        # The launcher route, which is the one that is supposed to work.
-        $r = Invoke-Timed -Exe 'cmd.exe' `
-            -ArgLine ('/c ""' + (Join-Path $RelocateTo 'mojo.cmd') + '" run --no-optimization "' + $movedProj + '\main.mojo""') `
+        # The compiler by itself, from the moved tree, with nothing set and
+        # nothing rewritten. Before this it took a launcher to repair the
+        # configuration first; now there is nothing to repair.
+        $r = Invoke-Timed -Exe (Join-Path $RelocateTo 'bin\mojo.exe') `
+            -ArgLine ('run --no-optimization "' + $movedProj + '\main.mojo"') `
             -Cwd $movedProj -Ms 240000 -ClearEnv $scrub
-        Record 'relocated-launcher-repairs' ($r.Output -match 'MOJO-OK 285') `
-            'mojo.cmd rewrote modular.cfg for the new location and ran'
-        if (-not ($r.Output -match 'MOJO-OK 285')) { Show-Tail 'mojo.cmd on moved tree' $r.Output 15 }
+        Record 'relocated-compiler-runs' ($r.Output -match 'MOJO-OK 285') `
+            'mojo.exe found its moved package by itself; nothing was rewritten'
+        if (-not ($r.Output -match 'MOJO-OK 285')) { Show-Tail 'mojo.exe on moved tree' $r.Output 15 }
+        $touched = Get-ChildItem $RelocateTo -File -Force | Where-Object { $_.Name -like 'modular.cfg*' -and $_.Name -ne 'modular.cfg' }
+        Record 'relocated-tree-untouched' ($touched.Count -eq 0) $(
+            if ($touched.Count -eq 0) { 'no stamp, lock or template appeared beside modular.cfg' } else { ($touched.Name -join ', ') + ' appeared' })
 
         # And the IDE, started by its executable, from the moved tree. A person
         # who drags an installation and then double-clicks Griddle takes this
@@ -526,6 +521,65 @@ if (-not $Quick) {
             else { 'the IDE ran from a moved tree' })
         if (-not $movedOk) { Show-Tail 'griddle on moved tree' $r.Output 15 }
 
+        # AND THEN READ-ONLY, WHICH IS WHAT MSIX MAKES IT. An ACL deny of write
+        # data, append data and attributes on the whole tree -- the shape of
+        # C:\Program Files\WindowsApps -- and the same three things must still
+        # work: the compiler alone, the editor building and running a project
+        # that lives elsewhere, and a Python project. This is the case that
+        # found the compiler taking a lock file beside modular.cfg, and it is
+        # the gate for "this tree is not self-modifying".
+        # Every file's size and mtime BEFORE the tree is locked, so "untouched"
+        # afterwards is a comparison and not a guess. A time window failed a
+        # correct release here: files the build had staged minutes earlier
+        # looked "recently modified" while sitting in an ACL-locked tree.
+        $before = @{}
+        Get-ChildItem $RelocateTo -Recurse -File -Force -ErrorAction SilentlyContinue |
+            ForEach-Object { $before[$_.FullName] = "$($_.Length)|$($_.LastWriteTimeUtc.Ticks)" }
+        $me = "$env:USERDOMAIN\$env:USERNAME"
+        $null = icacls $RelocateTo /deny "${me}:(OI)(CI)(WD,AD,WA,WEA)" /T /C /Q 2>&1
+        $probeFile = Join-Path $RelocateTo 'ro-probe.txt'
+        $locked = $true
+        try { Set-Content $probeFile 'x' -ErrorAction Stop; $locked = $false; Remove-Item $probeFile -Force } catch { }
+        if (-not $locked) {
+            Record 'readonly-tree' $false 'could not make the copy read-only; the MSIX gate did not run'
+        } else {
+            $r = Invoke-Timed -Exe (Join-Path $RelocateTo 'bin\mojo.exe') `
+                -ArgLine ('run --no-optimization "' + $movedProj + '\main.mojo"') `
+                -Cwd $movedProj -Ms 240000 -ClearEnv $scrub
+            Record 'readonly-compiler-runs' ($r.Output -match 'MOJO-OK 285') $(
+                if ($r.Output -match 'MOJO-OK 285') { 'the compiler ran from a read-only tree' }
+                elseif ($r.Output -match 'crashed') { 'the compiler CRASHED on a read-only tree -- it is writing where it lives' }
+                else { 'the compiler failed on a read-only tree' })
+            if (-not ($r.Output -match 'MOJO-OK 285')) { Show-Tail 'read-only compiler' $r.Output 10 }
+
+            $r = Invoke-Timed -Exe (Join-Path $RelocateTo 'bin\griddle.exe') `
+                -ArgLine ('--no-lsp --cmd "project ' + $movedProj + ';;open ' + $movedProj + '\main.mojo;;build;;build wait 240000;;run;;run wait 240000;;output"') `
+                -Cwd $movedProj -Ms 300000 -ClearEnv $scrub
+            Record 'readonly-ide-builds-and-runs' (($r.Output -match 'MOJO-OK 285') -and (Test-Path (Join-Path $movedProj 'main.exe'))) $(
+                if ($r.TimedOut) { 'timed out' } else { 'the editor built and ran a project from a read-only toolchain' })
+            if (-not ($r.Output -match 'MOJO-OK 285')) { Show-Tail 'read-only IDE' $r.Output 12 }
+
+            $roPy = Join-Path $work 'ro-py'
+            New-Item -ItemType Directory -Force -Path $roPy | Out-Null
+            Set-Content -Path "$roPy\requirements.txt" -Value 'six==1.16.0' -Encoding ascii
+            Set-Content -Path "$roPy\main.py" -Value 'import six; print("PY-RO-OK", six.__version__)' -Encoding ascii
+            $r = Invoke-Timed -Exe (Join-Path $RelocateTo 'bin\griddle.exe') `
+                -ArgLine ('--no-lsp --cmd "project ' + $roPy + ';;open ' + $roPy + '\main.py;;run;;run wait 300000;;output"') `
+                -Cwd $roPy -Ms 360000 -ClearEnv $scrub
+            Record 'readonly-python-runs' ($r.Output -match 'PY-RO-OK 1\.16\.0') $(
+                if ($r.TimedOut) { 'timed out' } else { 'a Python project set up and ran with the toolchain read-only' })
+            if (-not ($r.Output -match 'PY-RO-OK')) { Show-Tail 'read-only python' $r.Output 12 }
+
+            $changed = @()
+            Get-ChildItem $RelocateTo -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                $now = "$($_.Length)|$($_.LastWriteTimeUtc.Ticks)"
+                if (-not $before.ContainsKey($_.FullName)) { $changed += ('+' + $_.FullName.Replace($RelocateTo, '')) }
+                elseif ($before[$_.FullName] -ne $now) { $changed += ('~' + $_.FullName.Replace($RelocateTo, '')) }
+            }
+            Record 'readonly-tree-untouched' ($changed.Count -eq 0) $(
+                if ($changed.Count -eq 0) { 'no file in the tree was created or modified' } else { ($changed | Select-Object -First 3) -join ', ' })
+        }
+        $null = icacls $RelocateTo /remove:d "$me" /T /C /Q 2>&1
         Remove-Item -Recurse -Force $RelocateTo -ErrorAction SilentlyContinue
     }
 }

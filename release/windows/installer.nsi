@@ -11,8 +11,8 @@
 ; means no elevation prompt and no admin, the default directory is under
 ; %LOCALAPPDATA%, and the uninstall entry lives in HKCU. The user can point
 ; it anywhere they can write -- a second drive, a memory stick -- because the
-; tree relocates itself; the installer runs paths.cmd once at the end so the
-; configuration is right before the first launch rather than after it.
+; toolchain finds its own package from its executable and its configuration
+; names no absolute path. Nothing is rewritten at install time or after.
 ;
 ; Built by create-release.ps1 -Installer, which passes:
 ;   /DRELEASE_DIR=<staged release tree>   what to package
@@ -47,21 +47,6 @@ InstallDir "$LOCALAPPDATA\WinMojo\app"
 InstallDirRegKey HKCU "Software\WinMojo" "InstallDir"
 
 !include "MUI2.nsh"
-
-; For broadcasting the environment change the install section makes: without
-; the broadcast the variable is in the registry and no already-running program
-; knows it, so it takes effect at the next sign-in and looks like it did not
-; work.
-;
-; Guarded rather than defined outright, because both already come from
-; WinMessages.nsh, which MUI2.nsh includes. Defining them unconditionally is
-; what makensis rejects with `!define: "HWND_BROADCAST" already defined!`.
-!ifndef HWND_BROADCAST
-  !define HWND_BROADCAST 0xFFFF
-!endif
-!ifndef WM_SETTINGCHANGE
-  !define WM_SETTINGCHANGE 0x001A
-!endif
 !include "FileFunc.nsh"
 
 !define MUI_ABORTWARNING
@@ -90,12 +75,9 @@ Section "Toolchain and IDE" SecCore
   SetOutPath "$INSTDIR"
   File "${RELEASE_DIR}\LICENSE"
   File "${RELEASE_DIR}\README.md"
-  File "${RELEASE_DIR}\modular.cfg.in"
   File "${RELEASE_DIR}\modular.cfg"
-  File "${RELEASE_DIR}\modular.cfg.root"
   File "${RELEASE_DIR}\BUILD-REVISION.txt"
   File "${RELEASE_DIR}\SHA256SUMS.txt"
-  File "${RELEASE_DIR}\paths.cmd"
   File "${RELEASE_DIR}\install.ps1"
   File "${RELEASE_DIR}\griddle.cmd"
   File "${RELEASE_DIR}\mojo.cmd"
@@ -114,35 +96,12 @@ Section "Toolchain and IDE" SecCore
   ; chapter's first build must exist on every install.
   SetOutPath "$INSTDIR\examples"
   File "${RELEASE_DIR}\examples\hello.mojo"
-  ; The working directories the toolchain expects to find.
-  CreateDirectory "$INSTDIR\cache"
-  CreateDirectory "$INSTDIR\crashdb"
-
-  ; Point the configuration at wherever the user chose, now, so the first
-  ; launch -- from the finish page, a shortcut, or the exe directly -- finds
-  ; paths that are already right. griddle.exe would heal them itself, but a
-  ; plain `mojo build` from mojo-shell.cmd deserves the same head start.
-  nsExec::ExecToLog 'cmd /c call "$INSTDIR\paths.cmd"'
-  Pop $0
-
-  ; MODULAR_HOME, so the compiler works when it is not started by a launcher.
-  ;
-  ; `bin\mojo.exe` cannot find modular.cfg on its own -- not beside itself, not
-  ; one directory up, where this installer just wrote it. It reads MODULAR_HOME
-  ; and nothing else. The .cmd launchers in the root set it for the length of
-  ; one command, which is why `mojo-shell.cmd` works and is also why the
-  ; problem stayed hidden: the natural thing, putting $INSTDIR\bin on PATH and
-  ; typing `mojo`, produces
-  ;
-  ;     error: unable to locate module 'std'
-  ;
-  ; on a complete and correct installation. That reads as a broken toolchain,
-  ; and people do not report it, they give up.
-  ;
-  ; Per-user, like everything else this installer writes, and removed on
-  ; uninstall only when it still names this installation.
-  WriteRegExpandStr HKCU "Environment" "MODULAR_HOME" "$INSTDIR"
-  SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
+  ; Nothing is created for the toolchain to write into, and nothing is
+  ; rewritten: the compiler finds this package from its own executable, its
+  ; configuration names no absolute path, and its cache and crash database
+  ; live under %LOCALAPPDATA%\WinMojo. The installed tree is never modified
+  ; after this section finishes -- which is what lets the same tree be
+  ; packaged as MSIX, where it is read-only by construction.
 
   ; Apps & Features, per user.
   WriteRegStr HKCU "Software\WinMojo" "InstallDir" "$INSTDIR"
@@ -217,8 +176,8 @@ Section "Uninstall"
   ; The sentinel first: $INSTDIR is wherever the user pointed the installer,
   ; and deleting a directory recursively on the strength of a registry entry
   ; alone is how uninstallers make the news. No template, no deletion.
-  IfFileExists "$INSTDIR\modular.cfg.in" +3 0
-    MessageBox MB_OK|MB_ICONSTOP "This does not look like a WinMojo installation (no modular.cfg.in in $INSTDIR); nothing was removed." /SD IDOK
+  IfFileExists "$INSTDIR\bin\mojo.exe" +3 0
+    MessageBox MB_OK|MB_ICONSTOP "This does not look like a WinMojo installation (no bin\mojo.exe in $INSTDIR); nothing was removed." /SD IDOK
     Abort
   RMDir /r "$INSTDIR"
   Delete "$SMPROGRAMS\WinMojo\Griddle.lnk"
@@ -229,13 +188,14 @@ Section "Uninstall"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WinMojo"
   DeleteRegKey HKCU "Software\WinMojo"
 
-  ; MODULAR_HOME goes only if it still points here. A second installation
-  ; elsewhere will have overwritten it, and removing that one's value while
-  ; uninstalling this one would break the copy the person kept.
+  ; An earlier installer registered MODULAR_HOME per user so that `mojo.exe`
+  ; could find its configuration. The compiler finds it by itself now, and a
+  ; leftover value pointing at a removed directory would send every later
+  ; `mojo` to a place that does not exist -- so it is cleared when it names
+  ; this installation, and left alone when it names another.
   ReadRegStr $0 HKCU "Environment" "MODULAR_HOME"
   StrCmp $0 "$INSTDIR" 0 winmojo_keep_env
     DeleteRegValue HKCU "Environment" "MODULAR_HOME"
-    SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
   winmojo_keep_env:
 
   ; ---- the user's own data, and only if they say so ----------------------

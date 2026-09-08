@@ -28,10 +28,14 @@ to compile for a different card than the one present.
 - `mandelbrot.cmd` runs the prebuilt windowed NVIDIA Mandelbrot example.
 - `mojo-shell.cmd` opens a command prompt with the release DLL and MSVC paths.
 
-The launchers set `MODULAR_HOME`, package lookup, debugger paths, Crashpad,
-Windows API metadata, runtime DLL lookup, and the installed Visual Studio x64
-library environment. Executables built against the shared Mojo runtime should
-be run from `mojo-shell.cmd`, or with this release's `lib` directory on `PATH`.
+The compiler finds this package from its own executable, so `bin\mojo.exe`
+works from any shell with nothing set. The launchers only add `bin` and `lib`
+to `PATH` and find the installed Visual Studio x64 libraries for linking.
+Everything the toolchain writes -- its cache and crash reports -- goes to
+`%LOCALAPPDATA%\WinMojo`; nothing in this tree is ever modified after it is
+unpacked. Executables built against the shared Mojo runtime get the runtime
+DLLs copied beside them by the IDE; from the command line, run them from
+`mojo-shell.cmd` or with this release's `lib` directory on `PATH`.
 
 The release contains the Mojo compiler, `std` and `max` packages, LLDB and the
 Mojo debugger plugin, Crashpad, `lld`, the Windows API database, and the
@@ -44,9 +48,10 @@ runtime is bundled.
 Three ways, least commitment first:
 
 - **The zip alone.** Unpack it anywhere -- a directory, a second drive, a
-  memory stick -- and run `griddle.cmd` or any other launcher. The first
-  thing you run repoints the package at wherever it landed. Moving the
-  directory later is fine for the same reason.
+  memory stick, a read-only location -- and run `bin\griddle.exe`,
+  `bin\mojo.exe` or any launcher. Nothing is configured and nothing is
+  rewritten; the tree finds itself wherever it is, so moving it later is
+  fine too.
 - **The installer** (`*-setup-*.exe`). The same tree with the usual
   conveniences: pick a directory (anywhere you can write -- no
   administrator rights, nothing touches system directories), choose
@@ -57,8 +62,7 @@ Three ways, least commitment first:
   one root with a `current` junction, so several versions sit side by
   side and switching is repointing the junction.
 
-The IDE is `griddle.cmd`, or `bin\griddle.exe` directly -- the editor
-repoints the configuration itself at startup, so a pinned taskbar
-shortcut to the exe works. Python comes bundled in `python\`; the
+The IDE is `bin\griddle.exe`, directly or via `griddle.cmd`; a pinned
+taskbar shortcut to the exe works because nothing needs setting up first. Python comes bundled in `python\`; the
 IDE's Python menu and the compiler's interop use it with nothing to
 configure. The programmer's guide is in `WinMojoGuide\`.

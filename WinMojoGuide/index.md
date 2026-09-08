@@ -30,9 +30,16 @@ the database, and if the name is wrong the program does not build.
 ## Getting it
 
 Download the release zip and unpack it anywhere — a folder in your profile, a
-second drive, a memory stick. The first command you run repoints the
-installation at wherever it landed, so there is nothing to configure and no
-installer to trust.
+second drive, a memory stick. There is nothing to configure: the compiler
+finds its own installation from wherever its executable is, and nothing in
+the tree is ever rewritten, so the same unpacked folder works read-only, on a
+drive that changes letter, or inside a package. `bin\mojo.exe` works on its
+own from any shell; the `.cmd` launchers only add `bin` and `lib` to `PATH`
+and find your Visual Studio libraries for linking.
+
+Everything the toolchain writes — its cache and crash reports — goes to
+`%LOCALAPPDATA%\WinMojo`, and everything Griddle writes goes to
+`%LOCALAPPDATA%\Griddle`. Your projects go wherever you put them.
 
     winmojo-<revision>.zip
 

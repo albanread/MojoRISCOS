@@ -172,12 +172,11 @@ foreach ($entry in $artifacts.GetEnumerator()) {
 
 $templateFiles = @(
     'README.md',
-    # The template and the relocator. Both have to be inside the package: the
-    # config is rewritten from the template by whichever launcher runs first
-    # after the package is moved, so a copy that carries neither is a copy
-    # that can only work in the directory it was packaged into.
-    'modular.cfg.in',
-    'paths.cmd',
+    # Shipped verbatim. The compiler finds this file from its own location and
+    # expands @ROOT@ to the directory it is in, so nothing rewrites it -- not
+    # a launcher, not the installer, not the editor. There used to be a
+    # template, a stamp and a relocator script for that; they are gone.
+    'modular.cfg',
     'install.ps1',
     'griddle.cmd',
     'mojo.cmd',
@@ -339,13 +338,15 @@ if ($stray) {
         (($stray | ForEach-Object { $_.FullName }) -join ', '))
 }
 
-$config = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'modular.cfg.in') -Raw).Replace('@RELEASE_ROOT@', $destinationPath)
-[System.IO.File]::WriteAllText((Join-Path $destinationPath 'modular.cfg'), $config, [System.Text.UTF8Encoding]::new($false))
-
-# The root this config was written for. paths.cmd compares it against where
-# the package actually is and rewrites modular.cfg when they differ, so a
-# release used where it was built never pays for the check.
-[System.IO.File]::WriteAllText((Join-Path $destinationPath 'modular.cfg.root'), $destinationPath, [System.Text.UTF8Encoding]::new($false))
+# A configuration that names a drive is one that only works on the machine
+# it was packaged on. That was every release before this; now it fails here.
+$staged = Get-Content -LiteralPath (Join-Path $destinationPath 'modular.cfg') -Raw
+if ($staged -match '(?m)^[^#]*[A-Za-z]:\\') {
+    throw "modular.cfg names an absolute path; the release must be relocatable"
+}
+foreach ($stale in 'modular.cfg.in', 'modular.cfg.root', 'paths.cmd') {
+    Remove-Item -LiteralPath (Join-Path $destinationPath $stale) -Force -ErrorAction SilentlyContinue
+}
 
 $revision = (git -C $repository rev-parse --short HEAD).Trim()
 [System.IO.File]::WriteAllText((Join-Path $destinationPath 'BUILD-REVISION.txt'), "$revision`r`n", [System.Text.UTF8Encoding]::new($false))

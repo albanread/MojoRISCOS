@@ -33,7 +33,7 @@ Check 'python-present'    (Test-Path "$Target\python\python.exe") 'python\python
 Check 'guide-present'     (Test-Path "$Target\WinMojoGuide\index.md") 'WinMojoGuide\index.md'
 Check 'examples-present'  (Test-Path "$Target\examples\win32\life\main.mojo") 'examples\win32\life'
 $cfg = if (Test-Path "$Target\modular.cfg") { Get-Content "$Target\modular.cfg" -Raw } else { '' }
-Check 'cfg-relocated'     ($cfg -match [regex]::Escape($Target)) 'modular.cfg names the install dir'
+Check 'cfg-relocatable'   (($cfg -ne '') -and ($cfg -notmatch '(?m)^[^#]*[A-Za-z]:\\')) 'modular.cfg names no absolute path'
 $uninst = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\WinMojo' -ErrorAction SilentlyContinue
 Check 'apps-and-features'  ($null -ne $uninst) "DisplayVersion $($uninst.DisplayVersion)"
 
