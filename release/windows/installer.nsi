@@ -46,13 +46,22 @@ InstallDir "$LOCALAPPDATA\WinMojo\app"
 ; A previous install's choice of directory wins over the default.
 InstallDirRegKey HKCU "Software\WinMojo" "InstallDir"
 
-; For broadcasting the environment change below. Without the broadcast the
-; variable is in the registry and no already-running program knows it, so it
-; takes effect at the next sign-in and looks like it did not work.
-!define HWND_BROADCAST 0xFFFF
-!define WM_SETTINGCHANGE 0x001A
-
 !include "MUI2.nsh"
+
+; For broadcasting the environment change the install section makes: without
+; the broadcast the variable is in the registry and no already-running program
+; knows it, so it takes effect at the next sign-in and looks like it did not
+; work.
+;
+; Guarded rather than defined outright, because both already come from
+; WinMessages.nsh, which MUI2.nsh includes. Defining them unconditionally is
+; what makensis rejects with `!define: "HWND_BROADCAST" already defined!`.
+!ifndef HWND_BROADCAST
+  !define HWND_BROADCAST 0xFFFF
+!endif
+!ifndef WM_SETTINGCHANGE
+  !define WM_SETTINGCHANGE 0x001A
+!endif
 !include "FileFunc.nsh"
 
 !define MUI_ABORTWARNING
