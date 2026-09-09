@@ -1,1 +1,0 @@
-CopyToClipboard2@SnippetLinkSearch[,"def LIT_CallOp"][[1]];
