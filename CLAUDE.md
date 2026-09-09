@@ -5,13 +5,35 @@ working with code in this repository.
 
 ## Repository Overview
 
-The Modular Platform is a unified platform for AI development and deployment
-that includes:
+**This is `mojo-riscos`, an unaffiliated fork — not Modular's repository.**
+Upstream is [modular/modular](https://github.com/modular/modular) at commit
+`f66d4d52`; Modular does not maintain, endorse or support this tree. Never
+direct a question, bug or patch about this fork to them. Read
+[README.md](README.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before deciding
+where a change belongs — most upstream-shaped changes should be sent upstream
+instead of made here.
 
-- **MAX**: High-performance inference server with OpenAI-compatible endpoints
-for LLMs and AI models
-- **Mojo**: A new programming language that bridges Python and systems
-programming, optimized for AI workloads
+The fork's purpose is a **RISC OS 5 target for 32-bit ARM** (StrongARM ARMv4
+for the RPCEmu sandbox, Cortex-A72 AArch32 for the Raspberry Pi 4). Work
+specific to that lives in `riscos/`, `riscos-test/`, `KGEN/` target plumbing
+and `bazel/`. See [RISCOS-PORT.md](RISCOS-PORT.md). The branch also carries a
+Windows x64 host port ([WINMOJO.md](WINMOJO.md)).
+
+Two rules that are not style preferences:
+
+- **Never strip a `Copyright (c) Modular Inc.` header** from a file you edit,
+  and never remove `LICENSE`, `Licenses/` or `NOTICE`. Apache 2.0 §4(a) and
+  §4(c) require them and almost every file here is still Modular's code.
+- **Never introduce a dependency on a Modular binary, wheel or account.**
+  Those fall under the Modular Community Licence in `Licenses/`; this tree
+  builds only from published Apache-licensed source.
+
+The upstream components the build still refers to:
+
+- **Mojo**: the language, compiler (`KGEN/`) and standard library (`mojo/`) —
+  the part this fork actually retargets.
+- **MAX**: inference server and kernels (`max/`). Out of scope here; present
+  because the fork tracks the whole monorepo.
 
 ## Essential Build Commands
 

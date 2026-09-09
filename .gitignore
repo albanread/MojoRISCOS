@@ -250,3 +250,37 @@ spikes/com/*.obj
 examples/**/*.exe
 examples/**/*.lib
 examples/**/*.pdb
+
+# ===========================================================================
+# Licensing safety rail
+#
+# This fork is developed inside a workspace (F:\RISCOSDEV) holding RISC OS
+# Open material licensed to the author but not redistributable: the DDE
+# toolchain, the Programmer's Reference Manual, and ROM images. The RISC OS
+# target work draws on all three, so the risk of one being copied in beside a
+# generated binding is real.
+#
+# SWI names and numbers are facts and are fine to commit. The PRM database is
+# not: its on_entry/on_exit/use_text columns hold prose extracted verbatim
+# from a copyrighted manual. Commit generated bindings and the generator that
+# produced them, never the database or the manual.
+# ===========================================================================
+*.sqlite
+*.sqlite3
+riscos_prm.db
+docs/PRM/
+docs/DDE/
+**/PRM/pdf/
+ROOL_DDE*.zip
+HardDisc4*.zip
+IOMD-Soft*.zip
+PlingSystem.zip
+
+# RISC OS target build products. Scoped to riscos-test/ deliberately: a bare
+# *.o or *.elf would swallow LLVM and KGEN test fixtures elsewhere in the
+# tree, which is the same hazard the build/ and target/ notes above describe.
+# The .mojo sources stay, and so do the emitted .s files -- RISCOS-PORT.md
+# cites them as evidence of what the ARM backend actually produces.
+riscos-test/*.o
+riscos-test/*.elf
+riscos-test/*,ff8

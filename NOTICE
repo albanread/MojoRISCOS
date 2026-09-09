@@ -1,0 +1,84 @@
+==============================================================================
+mojo-riscos — Mojo targeting RISC OS 5 (32-bit ARM)
+==============================================================================
+
+This product includes software developed by Modular, Inc.
+
+    Mojo, MAX, KGEN and the Modular standard library
+    Copyright (c) Modular, Inc.
+    Licensed under the Apache License, Version 2.0, with LLVM Exceptions.
+    Upstream: https://github.com/modular/modular
+
+Modifications in this fork
+    Copyright 2026 Alban Read
+    Licensed under the Apache License, Version 2.0, with LLVM Exceptions —
+    the same terms as the work they modify.
+
+
+------------------------------------------------------------------------------
+Statement of changes (Apache License 2.0, section 4(b))
+------------------------------------------------------------------------------
+
+This is a MODIFIED fork of `modular/modular`, branched at upstream commit
+f66d4d52, published at https://github.com/albanread/MojoRISCOS. It is not Modular's distribution and Modular does not support,
+endorse or maintain it. Files in the following areas have been added or
+changed relative to that base:
+
+    KGEN/          compiler driver and target plumbing: a RISC OS target,
+                   AArch32 code generation reached through the ARM backend
+    bazel/         build configuration — ARM backend enabled in the vendored
+                   LLVM, toolchains and sysroot rules per port
+    mojo/          standard library: `sys` and platform layers reached
+                   through RISC OS SWIs rather than POSIX
+    Support/       host-side portability (paths, logging, threading)
+    AsyncRT/       runtime glue for the ported hosts
+    max/, nvptx/   device-layer implementations written against the
+                   published ABI declarations
+    examples/, spikes/, riscos/, riscos-test/, tools/, docs/, ide/,
+    dragon/, gamepane/, WinMojoGuide/, release/, bench/, utils/
+                   new work original to this fork
+
+The `riscos` branch also merges a Windows-x64 host port (WINMOJO) by the same
+author, which is why host-side changes appear alongside the target work.
+
+Per-file history is authoritative: see `git log` and `git diff f66d4d52..HEAD`.
+
+
+------------------------------------------------------------------------------
+Licence files in this tree
+------------------------------------------------------------------------------
+
+LICENSE                     Apache 2.0 with LLVM Exceptions, verbatim from
+                            upstream. This is the licence that governs the
+                            source in this repository, upstream's and this
+                            fork's alike.
+
+Licenses/LICENSE            Modular Community License Terms, verbatim from
+                            upstream. Those terms govern Modular's binary SDK
+                            distribution (the packaged `mojo` toolchain, MAX
+                            binaries, wheels). This repository distributes no
+                            such binary — see below — so they do not reach
+                            anything built from this tree. The file is kept
+                            because upstream ships it and a derivative work
+                            must not quietly drop licence documents.
+
+Licenses/Third-Party-Notices
+                            Third-party notices, verbatim from upstream.
+
+Individual files and vendored subtrees may carry their own headers and their
+own terms; LLVM and its third-party components are vendored under the build
+configuration. Read the header of a file before extracting it from this tree.
+
+
+------------------------------------------------------------------------------
+Provenance
+------------------------------------------------------------------------------
+
+No Modular binary, wheel, package or account was used to produce this work.
+Everything here is built from published Apache-licensed source. Where a device
+runtime was required it was implemented against published ABI declarations,
+not extracted, decompiled or disassembled from any binary.
+
+Mojo, MAX and Modular are marks of Modular, Inc. No trademark licence is
+granted by the Apache 2.0 licence or by this notice, and this fork is not
+distributed under those marks.
