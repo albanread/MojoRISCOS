@@ -1,4 +1,4 @@
-"""The Mandelbrot set in a window, Q16.16 fixed point.
+"""The Mandelbrot set in a window, Q16.16 fixed point, click to zoom.
 
 demos/mandelbrot.mojo draws the set in ASCII. This draws it in colour, in
 a real desktop window, with the same arithmetic: there is no FPU here and
@@ -7,15 +7,21 @@ Q16.16 is not a workaround for that - it is what you would have written
 for a StrongARM in 1996, and it is far quicker than any soft-float
 emulation would be.
 
-The picture is computed once, before the task ever calls Wimp_Initialise,
-and kept in a byte per cell. That ordering matters: computing inside the
-poll loop would hold up Wimp_Poll and freeze every other application on
-the desktop for as long as it took, and computing inside a redraw would
-do it again on every expose.
+Select zooms in on the point clicked, Adjust zooms back out. That is the
+RISC OS convention for a pair of opposite actions, and it saves inventing
+a menu for two verbs.
 
-Redraw paints from the buffer, run-length encoded along each row, so a
-band of identical colour costs one rectangle rather than thirty-two. The
-set has long runs, which is why it is worth doing.
+Q16.16 sets the floor on how deep the zoom can go, and it is not deep.
+The fraction is sixteen bits, so the finest step representable is 1/65536.
+Starting from a span of 3.0 across 128 cells the step is 1536 units and
+every zoom halves it, so by the ninth it is 3 and the picture is visibly
+quantised. Zooming in therefore stops when the next step would fall below
+2, rather than dissolving into blocks. Going deeper is not a matter of
+more iterations; it needs a wider fixed point.
+
+Redraw paints from a byte-per-cell buffer, run-length encoded along each
+row, so a band of identical colour costs one rectangle rather than
+thirty-two. The set has long runs, which is why it is worth doing.
 """
 
 from riscos import os
@@ -25,7 +31,6 @@ from demos.vdu import putc, puts, put_int
 
 comptime ONE = 65536                    # 1.0 in Q16.16
 comptime FOUR = 4 * ONE                 # escape radius, squared
-comptime MAX_ITER = 64
 
 comptime COLS = 128
 comptime ROWS = 128
@@ -34,9 +39,17 @@ comptime STATUS = Int32(52)
 comptime W = CELL * COLS
 comptime H = CELL * ROWS + STATUS
 
+comptime BASE_ITER = Int32(64)
+comptime ITER_PER_ZOOM = Int32(32)
+comptime ITER_CAP = Int32(256)
+comptime MIN_STEP = Int32(2)            # below this, Q16.16 has run out
+
 comptime INSIDE_INK = Int32(7)          # black
 comptime GREY_INK = Int32(1)
 comptime BLACK_INK = Int32(7)
+
+comptime SELECT = Int32(4)
+comptime ADJUST = Int32(1)
 
 
 @always_inline
@@ -49,14 +62,22 @@ fn qmul(a: Int32, b: Int32) -> Int32:
     return Int32((Int64(a) * Int64(b)) >> 16)
 
 
-fn colour_of(n: Int32) -> Int32:
+fn iterations_at(depth: Int32) -> Int32:
+    """A deeper view needs more iterations or it all reads as inside."""
+    let n = BASE_ITER + depth * ITER_PER_ZOOM
+    if n > ITER_CAP:
+        return ITER_CAP
+    return n
+
+
+fn colour_of(n: Int32, max_iter: Int32) -> Int32:
     """Escape time to a Wimp colour. Inside the set is black.
 
     Eight colours cycling on the escape count, which is what makes the
     bands visible: a monotonic ramp over only sixteen desktop colours
     would put most of the interesting structure in one shade.
     """
-    if n >= MAX_ITER:
+    if n >= max_iter:
         return INSIDE_INK
     let k = n % 8
     if k == 0:
@@ -76,29 +97,32 @@ fn colour_of(n: Int32) -> Int32:
     return 12                           # cream
 
 
-fn compute(buf: UnsafePointer[UInt8, MutUntrackedOrigin]):
-    """One byte of colour per cell, top row first."""
-    # 3.0 wide by 3.0 tall over a square window. The ASCII demo uses
-    # +/-1.25 because its character cells are twice as tall as they are
-    # wide; here the cells are square, and that range would stretch the
-    # set vertically by a fifth.
-    let x0 = -2.25 * ONE
-    let x1 = 0.75 * ONE
-    let y0 = -1.5 * ONE
-    let y1 = 1.5 * ONE
-    let dx = Int32((x1 - x0) // COLS)
-    let dy = Int32((y1 - y0) // ROWS)
+fn step_for(half: Int32) -> Int32:
+    """The Q16.16 distance from one cell to the next."""
+    return (2 * half) // COLS
+
+
+fn compute(buf: UnsafePointer[UInt8, MutUntrackedOrigin],
+           centre_x: Int32, centre_y: Int32, half: Int32, max_iter: Int32):
+    """One byte of colour per cell, top row first.
+
+    The view is a centre and a half-span rather than a pair of corners,
+    because that is what zooming acts on: recentre, then halve.
+    """
+    let step = step_for(half)
+    let left = centre_x - half
+    let upper = centre_y + half
 
     # Rows run downwards on the screen and the imaginary axis runs upwards,
     # so this starts at the top of the range and subtracts.
-    var cy = Int32(y1)
+    var cy = upper
     for row in range(ROWS):
-        var cx = Int32(x0)
+        var cx = left
         for col in range(COLS):
             var zr: Int32 = 0
             var zi: Int32 = 0
             var n: Int32 = 0
-            while n < MAX_ITER:
+            while n < max_iter:
                 let zr2 = qmul(zr, zr)
                 let zi2 = qmul(zi, zi)
                 if zr2 + zi2 > FOUR:
@@ -107,9 +131,9 @@ fn compute(buf: UnsafePointer[UInt8, MutUntrackedOrigin]):
                 zi = qmul(zr, zi) * 2 + cy
                 zr = t
                 n += 1
-            buf[row * COLS + col] = UInt8(colour_of(n))
-            cx += dx
-        cy -= dy
+            buf[row * COLS + col] = UInt8(colour_of(n, max_iter))
+            cx += step
+        cy -= step
 
 
 fn fill_rect(x0: Int32, y0: Int32, x1: Int32, y1: Int32):
@@ -117,7 +141,8 @@ fn fill_rect(x0: Int32, y0: Int32, x1: Int32, y1: Int32):
     os.plot(101, x1, y1)
 
 
-fn draw(buf: UnsafePointer[UInt8, MutUntrackedOrigin], ox: Int32, oy: Int32):
+fn draw(buf: UnsafePointer[UInt8, MutUntrackedOrigin],
+        ox: Int32, oy: Int32, depth: Int32, max_iter: Int32):
     let top = oy
     let plot_top = oy - STATUS
 
@@ -143,17 +168,38 @@ fn draw(buf: UnsafePointer[UInt8, MutUntrackedOrigin], ox: Int32, oy: Int32):
     # 512 OS units is 32 characters of the system font, and the title bar
     # already says what this is, so the strip does not repeat it.
     putc(5)
-    puts("Q16.16 fixed point   ")
-    put_int(Int64(MAX_ITER))
-    puts(" iters")
+    puts("Q16.16  zoom ")
+    put_int(Int64(Int32(1) << depth))
+    puts("  ")
+    put_int(Int64(max_iter))
+    puts(" it")
     putc(4)
+
+
+fn repaint(win: wimp.WindowHandle, block: wimp.PollBlock,
+           buf: UnsafePointer[UInt8, MutUntrackedOrigin],
+           depth: Int32, max_iter: Int32):
+    """Draw now, rather than asking the Wimp to ask us later."""
+    var more = wimp.begin_update(win, block, 0, -H, W, 0)
+    while more != 0:
+        draw(buf, wimp.origin_x(block), wimp.origin_y(block), depth, max_iter)
+        more = wimp.next_rectangle(block)
 
 
 fn main():
     # Before Wimp_Initialise on purpose: this takes a moment, and a task
     # that is not yet a task cannot hold up anybody else's redraw.
     let buf = wimp.alloc(Int32(COLS * ROWS))
-    compute(buf)
+
+    # -0.75 and 1.5 as exact Q16.16, written as integer arithmetic rather
+    # than Int32(-0.75 * ONE): a float literal will not convert, and in a
+    # fixed-point program the integer form is the honest one anyway.
+    var centre_x = Int32(-3 * ONE // 4)
+    var centre_y = Int32(0)
+    var half = Int32(3 * ONE // 2)
+    var depth = Int32(0)
+    var max_iter = iterations_at(0)
+    compute(buf, centre_x, centre_y, half, max_iter)
 
     let task = wimp.initialise("Mandelbrot")
     let win = wimp.game_window("Mandelbrot", W, H)
@@ -170,19 +216,71 @@ fn main():
     open[7] = -1
     wimp.open_window_from_poll(block)
 
+    # A Mouse_Click block carries the pointer and not the window, so the
+    # origin has to be the one cached from the last redraw or open. Every
+    # window move raises Open_Window_Request, so it stays current.
+    var ox = Int32(260)
+    var oy = Int32(260 + H)
     var running = True
+
     while running:
         let event = wimp.poll(1, block)
+
         if event == wimp.REDRAW_WINDOW_REQUEST:
             var more = wimp.begin_redraw(block)
-            let ox = wimp.origin_x(block)
-            let oy = wimp.origin_y(block)
+            ox = wimp.origin_x(block)
+            oy = wimp.origin_y(block)
             while more != 0:
-                draw(buf, ox, oy)
+                draw(buf, ox, oy, depth, max_iter)
                 more = wimp.next_rectangle(block)
+
         elif event == wimp.OPEN_WINDOW_REQUEST:
             wimp.open_window_from_poll(block)
+            ox = wimp.origin_x(block)
+            oy = wimp.origin_y(block)
+
         elif event == wimp.CLOSE_WINDOW_REQUEST:
             running = False
+
+        elif event == wimp.MOUSE_CLICK:
+            let buttons = wimp.word(block, 2)
+            let dx = wimp.word(block, 0) - ox
+            let dy = (oy - STATUS) - wimp.word(block, 1)
+            var changed = False
+
+            if dx >= 0 and dx < W and dy >= 0 and dy < CELL * ROWS:
+                if buttons == SELECT:
+                    # Recentre on the clicked cell, then halve the span.
+                    # Refused rather than allowed to dissolve when the next
+                    # step would fall below what Q16.16 can represent.
+                    let next_half = half // 2
+                    if step_for(next_half) >= MIN_STEP:
+                        let step = step_for(half)
+                        centre_x = centre_x - half + (dx // CELL) * step
+                        centre_y = centre_y + half - (dy // CELL) * step
+                        half = next_half
+                        depth += 1
+                        changed = True
+                elif buttons == ADJUST:
+                    if depth > 0:
+                        half = half * 2
+                        depth -= 1
+                        changed = True
+
+            if changed:
+                # This does block the desktop: Wimp_Poll is not called again
+                # until it returns. The hourglass is the RISC OS way of
+                # admitting that. Slicing the work across Null events is the
+                # real answer if it ever grows past a second or so.
+                # An hourglass belongs here and cannot have one yet:
+                # hourglass.on() exists as a binding and as a C shim, but
+                # only swis_os and swis_wimp of the library's 45 modules
+                # are ever compiled and linked, so it fails with
+                # "undefined: Hourglass_On". The fix is the library
+                # becoming an archive the linker draws from, not another
+                # object hardcoded into the link line.
+                max_iter = iterations_at(depth)
+                compute(buf, centre_x, centre_y, half, max_iter)
+                repaint(win, block, buf, depth, max_iter)
 
     wimp.close_down(task)
