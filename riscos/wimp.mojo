@@ -269,16 +269,26 @@ comptime USER_MESSAGE_ACKNOWLEDGE = Int32(19)
 
 
 def initialise(name: StringLiteral) -> TaskHandle:
-    """Registers the task with the Wimp (Wimp_Initialise, PRM 3-59)."""
-    let version_out = _version_out()
+    """Registers the task with the Wimp (Wimp_Initialise, PRM 3-59).
+
+    The scratch cell for the version out-value is allocated here, in the
+    frame that is live across the call, and not in a helper that returns
+    it. A helper returning stack_allocation hands back a pointer into its
+    own dead frame - which is the stack immediately below this one, which
+    is exactly where the Wimp_Initialise shim's frame lands. The SWI then
+    writes its version through that pointer, into the live frame of the
+    function it is running in, and corrupts the registers saved there. The
+    caller returns with a damaged sp and aborts on its next store.
+
+    Whether that is fatal depends on inlining and frame sizes, so it hid
+    for as long as nothing disturbed them and then presented as a data
+    abort in main caused by an edit to the drawing code.
+    """
+    var version_out = stack_allocation[1, DType.int32, 4]()
     let task = external_call["Wimp_Initialise", Int32](
         Int32(310), name.ptr(), version_out
     )
     return TaskHandle(task)
-
-def _version_out() -> UnsafePointer[Int32, MutUntrackedOrigin]:
-    """Scratch cell for the Wimp version out-value."""
-    return stack_allocation[1, DType.int32, 4]()
 
 
 def poll(mask: Int32, block: PollBlock) -> Int32:
