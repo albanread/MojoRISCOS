@@ -36,6 +36,14 @@ TRIPLE=armv8a-none-eabi
 CPU=cortex-a72
 TAG=a72
 
+# -fpregs, and it is not optional. Ask for a Cortex-A72 and LLVM assumes the
+# NEON unit a Cortex-A72 has: it vectorised a stack clear into `vmov.i32 d0,
+# #0` + `vst1.64`, and RISC OS - which has not enabled the FP unit for us -
+# stopped the program with "Internal error: undefined instruction at
+# &000084F4".  The StrongARM demos never saw this because armv4 has no NEON
+# to reach for.  -fpregs takes the registers away entirely, so anything
+# needing floating point fails to build here rather than at &000084F4.
+
 TO=
 AS=
 while true; do
@@ -55,7 +63,7 @@ for name in "$@"; do
 
     if ! "$MOJO" build --emit object \
             --target-triple $TRIPLE --target-cpu $CPU \
-            --target-features +strict-align \
+            --target-features +strict-align,-fpregs \
             -I "$ROOT/mojo/stdlib" -I "$ROOT" -I "$ROOT/riscos-test" \
             -o "build/$name.o" "$name.mojo" 2>"build/$name.log"; then
         echo "COMPILE FAILED - riscos-test/build/$name.log"
