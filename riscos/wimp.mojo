@@ -337,6 +337,17 @@ def _arena(bytes_: Int32) -> UnsafePointer[UInt8, MutUntrackedOrigin]:
     )
 
 
+def alloc(bytes_: Int32) -> UnsafePointer[UInt8, MutUntrackedOrigin]:
+    """Memory that outlives the call that asked for it.
+
+    The same arena the window blocks come from, exposed because a program
+    that draws needs somewhere to keep what it drew: a redraw must be able
+    to repaint from a buffer rather than recompute the picture. The arena
+    is 32 KB in total and is never freed, so ask once, at startup.
+    """
+    return _arena(bytes_)
+
+
 def _copy_str(src: StringLiteral) -> UnsafePointer[UInt8, MutUntrackedOrigin]:
     """Copy a literal into Wimp-lifetime memory; returns NUL-terminated."""
     let n = src.byte_length()
