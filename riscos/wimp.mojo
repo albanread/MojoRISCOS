@@ -238,8 +238,14 @@ struct PollBlock:
 
     @always_inline
     fn words(mut self) -> UnsafePointer[Int32, MutUntrackedOrigin]:
-        """View the block as 32-bit words."""
-        return UnsafePointer[Int32, MutUntrackedOrigin](self.ptr)
+        """View the block as 32-bit words.
+
+        bitcast, not a pointer constructor: UnsafePointer[Int32](p) where p
+        is a UInt8 pointer does not typecheck. Nothing called this until
+        now, and an uncalled method body is not elaborated, so it sat here
+        looking correct.
+        """
+        return self.ptr.bitcast[Int32]()
 
 
 comptime NULL_EVENT = Int32(0)
@@ -410,3 +416,107 @@ def open_window_from_poll(block: PollBlock) -> None:
     """Re-opens a window from an Open_Window_Request poll block
     (block words 0..5 already match the open block format)."""
     _ = external_call["Wimp_OpenWindow", Int32](block.ptr)
+
+
+# ------------- windows the program draws itself -------------
+
+comptime BUTTON_CLICK = Int32(3) << 12
+"""Work-area button type 3, in bits 12-15 of the window's +60 word.
+
+Left at the default 0 the Wimp reports no clicks on the work area at all.
+The events simply never arrive, which reads as a broken poll loop rather
+than as a window that asked not to be told.
+"""
+
+
+@always_inline
+fn word(block: PollBlock, index: Int32) -> Int32:
+    """One 32-bit word out of a poll block."""
+    return block.ptr.bitcast[Int32]()[Int(index)]
+
+
+def origin_x(block: PollBlock) -> Int32:
+    """Screen x of the work-area origin: visible x0 minus scroll x.
+
+    Redraw_Window_Request, Open_Window_Request and Wimp_UpdateWindow all
+    leave words 1..6 in the same arrangement, so one piece of arithmetic
+    serves all three and a click can be turned into a board square with
+    whatever block came back last.
+    """
+    return word(block, 1) - word(block, 5)
+
+
+def origin_y(block: PollBlock) -> Int32:
+    """Screen y of the work-area origin: visible y1 minus scroll y."""
+    return word(block, 4) - word(block, 6)
+
+
+def begin_redraw(block: PollBlock) -> Int32:
+    """Wimp_RedrawWindow: start a redraw. Non-zero while there is more."""
+    return redraw_window(block.ptr)
+
+
+def next_rectangle(block: PollBlock) -> Int32:
+    """Wimp_GetRectangle: the next clip rectangle, 0 when finished."""
+    return get_rectangle(block.ptr)
+
+
+def begin_update(win: WindowHandle, block: PollBlock,
+                 x0: Int32, y0: Int32, x1: Int32, y1: Int32) -> Int32:
+    """Wimp_UpdateWindow: redraw part of a window outside a redraw event.
+
+    Wimp_ForceRedraw is not bound yet, and this is the better call in any
+    case: it draws now, rather than asking to be asked later.
+    """
+    let w = block.ptr.bitcast[Int32]()
+    w[0] = win.value
+    w[1] = x0
+    w[2] = y0
+    w[3] = x1
+    w[4] = y1
+    return update_window(block.ptr)
+
+
+def game_window(title: StringLiteral, width: Int32, height: Int32) -> WindowHandle:
+    """A titled window with no icons, that the program draws itself.
+
+    simple_window above hands the drawing to the Wimp (WF_WIMP_REDRAW) and
+    fills the work area with icons, which is right for a dialogue and wrong
+    for a board. This clears that flag, gives the work area the requested
+    size with the origin at the top left and y running negative downwards,
+    and sets a button type so clicks are reported.
+    """
+    let block = _arena(Int32(88))
+
+    _w(block, 0)[0] = 300
+    _w(block, 1)[0] = 300
+    _w(block, 2)[0] = 300 + width
+    _w(block, 3)[0] = 300 + height
+    _w(block, 4)[0] = 0                 # scroll x
+    _w(block, 5)[0] = 0                 # scroll y
+    _w(block, 6)[0] = -1                # open at the top of the stack
+
+    _w(block, 7)[0] = (WF_NEW_STYLE | WF_TITLE_BAR | WF_CLOSE_ICON
+                       | WF_BACK_ICON | WF_MOVEABLE)
+
+    _w(block, 8)[0] = Int32(0x02070207)
+    _w(block, 9)[0] = Int32(0x00020301)
+
+    _w(block, 10)[0] = 0
+    _w(block, 11)[0] = -height
+    _w(block, 12)[0] = width
+    _w(block, 13)[0] = 0
+
+    _w(block, 14)[0] = IF_TEXT_INDIRECTED
+    _w(block, 15)[0] = BUTTON_CLICK
+    _w(block, 16)[0] = 1
+    _w(block, 17)[0] = 0
+
+    let title_buf = _copy_str(title)
+    _store_ptr(_w(block, 18), title_buf)
+    _w(block, 19)[0] = Int32(-1)
+    _w(block, 20)[0] = Int32(64)
+
+    _w(block, 21)[0] = 0                # no icons: we draw everything
+
+    return WindowHandle(create_window(block))
