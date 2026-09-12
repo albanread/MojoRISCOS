@@ -57,38 +57,55 @@ done
 [ $# -gt 0 ] || { echo "usage: pi4.sh [--to machine] [--as name] prog..." >&2; exit 2; }
 
 mkdir -p build
+failed=0
 
 for name in "$@"; do
     printf '%-14s ' "$name"
+
+    # A demo lives in demos/ and everything else beside this script. The
+    # image is written next to its source, so this build and the StrongARM
+    # one in demos/build.sh do not overwrite each other.
+    if [ -f "demos/$name.mojo" ]; then
+        src="demos/$name.mojo"
+        out="demos/${name}_$TAG,ff8"
+    else
+        src="$name.mojo"
+        out="${name}_$TAG,ff8"
+    fi
 
     if ! "$MOJO" build --emit object \
             --target-triple $TRIPLE --target-cpu $CPU \
             --target-features +strict-align,-fpregs \
             -I "$ROOT/mojo/stdlib" -I "$ROOT" -I "$ROOT/riscos-test" \
-            -o "build/$name.o" "$name.mojo" 2>"build/$name.log"; then
+            -o "build/$name.o" "$src" 2>"build/$name.log"; then
         echo "COMPILE FAILED - riscos-test/build/$name.log"
         grep -m3 "error:" "build/$name.log" | sed 's/^/    /'
-        exit 1
+        failed=$((failed + 1))
+        continue
     fi
 
-    if ! "$ROSCC" link --entry _start -o "${name}_$TAG,ff8" \
+    if ! "$ROSCC" link --entry _start -o "$out" \
             "$RT/crt0-$TAG.o" "build/$name.o" \
             "$RT/rostrt-$TAG.o" "$RT/wimp-$TAG.o" \
             "$RT/swis_os-$TAG.o" "$RT/swis_wimp-$TAG.o" \
             "$RT/aeabi-$TAG.o" "$RT/atomics-$TAG.o" >"build/$name.link" 2>&1; then
         echo "LINK FAILED"
         grep -m3 -iE "undefined|error" "build/$name.link" | sed 's/^/    /'
-        exit 1
+        failed=$((failed + 1))
+        continue
     fi
 
-    printf 'ok %7d bytes' "$(stat -c%s "${name}_$TAG,ff8")"
+    printf 'ok %7d bytes' "$(stat -c%s "$out")"
 
     if [ -n "$TO" ]; then
         leaf=${AS:-$name}
         share="$FARM/$TO/share"
         [ -d "$share" ] || { echo; echo "no share at $share" >&2; exit 1; }
-        cp "${name}_$TAG,ff8" "$share/$leaf,ff8"
+        cp "$out" "$share/$leaf,ff8"
         printf '  -> %s/%s,ff8' "$TO" "$leaf"
     fi
     echo
 done
+
+[ $failed -eq 0 ] || echo "$failed of $# failed"
+[ $failed -eq 0 ]
