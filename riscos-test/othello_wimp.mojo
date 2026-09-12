@@ -34,6 +34,7 @@ comptime WHITE_INK = Int32(0)
 comptime GREY_INK = Int32(1)
 comptime BLACK_INK = Int32(7)
 comptime FELT_INK = Int32(13)           # dark green
+comptime HINT_INK = Int32(10)           # bright green, against the dark felt
 
 
 fn fill_rect(x0: Int32, y0: Int32, x1: Int32, y1: Int32):
@@ -85,14 +86,32 @@ fn draw(b: UnsafePointer[UInt8, MutUntrackedOrigin],
                         felt_top - Int32(row) * SQ - SQ // 2,
                         SQ // 2 - 7)
 
+    # Where you may play. Every modern Othello marks the legal squares, and
+    # without it "you must outflank something" is guesswork for anyone who
+    # has not played before. flips() is 0 on an occupied square, so these
+    # can never land under a disc.
+    if not over and turn == BLACK:
+        wimp.set_colour(HINT_INK)
+        for row in range(8):
+            for col in range(8):
+                if flips(b, Int32(row * 8 + col), BLACK) > 0:
+                    fill_circle(ox + Int32(col) * SQ + SQ // 2,
+                                felt_top - Int32(row) * SQ - SQ // 2,
+                                7)
+
     # VDU 5 puts characters at the graphics cursor, so the score can sit in
     # the strip without a text-window mode change. Long String values come
     # back corrupted on this target (see demos/vdu.mojo), hence write_c.
     wimp.set_colour(BLACK_INK)
+    # VDU 5 hangs the character below the point you plot at, rather than
+    # sitting it on top as a baseline would, so this y is the top of the
+    # text and not its bottom. At -34 in a 52-unit strip the bottom third
+    # of every glyph was drawn over the board. -12 centres a 32-unit cell.
+    #
     # The system font is 16 OS units wide, so 512 units is 32 characters and
-    # the strip has to be written to fit: the first version ran off the right
+    # the line has to be written to fit: the first version ran off the right
     # edge at "your mov".
-    os.plot(4, ox + 8, top - 34)
+    os.plot(4, ox + 8, top - 12)
     putc(5)
     puts("Black ")
     put_int(Int64(count(b, BLACK)))
