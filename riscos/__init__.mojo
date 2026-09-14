@@ -1,15 +1,18 @@
 """RISC OS bindings for Mojo - generated from the PRM database plus
 hand-written idiomatic layers. Import as:
 
-    from riscos import os, wimp
+    from riscos import os, wimp, clib
 
-Generated modules: 45.
+Generated modules: 45 PRM modules plus the C library surface (clib,
+from clib.json — the portable layer: Mojo code should prefer it over
+SWIs so it survives RISC OS version changes).
 """
 
 from . import adfs
 from . import basictrans
 from . import buffer
 from . import cache
+from . import clib
 from . import colour_picker
 from . import colour_trans
 from . import compress_jpeg

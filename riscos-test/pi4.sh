@@ -84,11 +84,14 @@ for name in "$@"; do
         continue
     fi
 
+    # The C library veneers: programs importing riscos.clib call the
+    # SharedCLibrary through these (portable across RISC OS versions).
     if ! "$ROSCC" link --entry _start -o "$out" \
             "$RT/crt0-$TAG.o" "build/$name.o" \
             "$RT/rostrt-$TAG.o" "$RT/wimp-$TAG.o" \
             "$RT/swis_os-$TAG.o" "$RT/swis_wimp-$TAG.o" \
-            "$RT/aeabi-$TAG.o" "$RT/atomics-$TAG.o" >"build/$name.link" 2>&1; then
+            "$RT/aeabi-$TAG.o" "$RT/atomics-$TAG.o" \
+            "$RT/roclib-$TAG.o" "$RT/roclibinit-$TAG.o" >"build/$name.link" 2>&1; then
         echo "LINK FAILED"
         grep -m3 -iE "undefined|error" "build/$name.link" | sed 's/^/    /'
         failed=$((failed + 1))
