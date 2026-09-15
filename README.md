@@ -1,3 +1,9 @@
+> [!CAUTION]
+> 🛑 **REPOSITORY CLOSED — UNMAINTAINED.**
+>
+> Do not assume the reliability of any data in this repository. It will be
+> archived on **15 October 2026**.
+
 # mojo-riscos — Mojo for RISC OS 5 on 32-bit ARM
 
 ![NEW EXPERIMENT](https://img.shields.io/badge/NEW_EXPERIMENT-c1121f?style=for-the-badge&labelColor=c1121f)
