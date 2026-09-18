@@ -1,3 +1,5 @@
+This repository is scheduled to be archived on 15 October 2026. Pull requests and issues are not accepted.
+
 # mojo-riscos
 
 A fork of the Mojo compiler that emits 32-bit ARM code for RISC OS 5 on
